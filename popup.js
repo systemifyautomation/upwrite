@@ -1,5 +1,5 @@
 /**
- * Upright – Popup Script
+ * UpWrite – Popup Script
  *
  * Orchestrates:
  *  1. Settings (webhook URL persistence via chrome.storage.sync)
@@ -219,7 +219,7 @@ function updateSendButton() {
 function buildPayload() {
   const data = state.proposalData;
   return {
-    source: "upright-extension",
+    source: "upwrite-extension",
     pageUrl: data.pageUrl,
     job: {
       title: data.jobTitle,

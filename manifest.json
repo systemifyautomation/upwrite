@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Upright – Upwork Proposal Assistant",
-  "short_name": "Upright",
+  "name": "UpWrite – Upwork Proposal Assistant",
+  "short_name": "UpWrite",
   "version": "1.0.0",
   "description": "Extract Upwork proposal details, record a Loom video, and auto-generate AI proposals via your n8n webhook.",
   "icons": {
@@ -11,7 +11,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Upright",
+    "default_title": "UpWrite",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

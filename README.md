@@ -1,4 +1,4 @@
-# Upright – Upwork Proposal Assistant
+# UpWrite – Upwork Proposal Assistant
 
 > A Chrome extension that extracts Upwork proposal details, optionally records a Loom video, sends everything to your **n8n webhook**, and auto-fills the proposal form with the AI-generated response.
 
@@ -21,14 +21,14 @@
 2. Open **Chrome** → `chrome://extensions`.
 3. Enable **Developer mode** (top-right toggle).
 4. Click **Load unpacked** and select the root folder of this repo (where `manifest.json` lives).
-5. The **Upright** icon appears in your toolbar.
+5. The **UpWrite** icon appears in your toolbar.
 
 ---
 
 ## Setup
 
 1. Click the **⚙ Settings** button inside the popup.
-2. Enter your **n8n webhook URL** (e.g. `https://your-n8n-instance.com/webhook/upright`).
+2. Enter your **n8n webhook URL** (e.g. `https://your-n8n-instance.com/webhook/upwrite`).
 3. Click **Save**.
 
 ---
@@ -36,7 +36,7 @@
 ## Usage
 
 1. Navigate to an **Upwork proposal page** (`upwork.com/nx/proposals/…`).
-2. Click the **Upright** toolbar icon.
+2. Click the **UpWrite** toolbar icon.
 3. **Step 1 – Extract**: Click *Extract Proposal Data* to pull job + form details.
 4. **Step 2 – Loom** *(optional)*: Click *Record with Loom* or paste an existing Loom URL.
 5. **Step 3 – Generate**: Click *Send to Webhook*.
@@ -48,7 +48,7 @@
 
 ```json
 {
-  "source": "upright-extension",
+  "source": "upwrite-extension",
   "pageUrl": "https://www.upwork.com/nx/proposals/job/~01abc.../apply",
   "job": {
     "title": "Build a REST API",
@@ -96,7 +96,7 @@ Or a flat array (first element = cover letter, rest = question answers):
 ## File Structure
 
 ```
-upright/
+upwrite/
 ├── manifest.json      Chrome Manifest V3
 ├── background.js      Service worker – webhook proxy + settings storage
 ├── content.js         Content script – extracts & auto-fills Upwork proposal page
@@ -115,7 +115,7 @@ upright/
 
 No build step required – this is a plain-JS Manifest V3 extension.
 
-After editing any file, go to `chrome://extensions` and click the **↺ Reload** button for the Upright extension.
+After editing any file, go to `chrome://extensions` and click the **↺ Reload** button for the UpWrite extension.
 
 ---
 

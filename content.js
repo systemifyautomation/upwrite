@@ -1,5 +1,5 @@
 /**
- * Upright – Content Script
+ * UpWrite – Content Script
  *
  * Runs on Upwork proposal pages. Responsible for:
  *  1. Extracting job + proposal field data from the DOM.

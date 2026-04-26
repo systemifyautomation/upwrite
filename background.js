@@ -1,5 +1,5 @@
 /**
- * Upright – Background Service Worker
+ * UpWrite – Background Service Worker
  *
  * Responsibilities:
  *  1. Forward webhook requests from the popup (avoids CORS issues).
