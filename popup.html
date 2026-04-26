@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Upright</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <!-- ===== Header ===== -->
+    <header class="header">
+      <div class="header__logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 2L2 7l10 5 10-5-10-5z" fill="#14a800"/>
+          <path d="M2 17l10 5 10-5" stroke="#14a800" stroke-width="2" stroke-linecap="round"/>
+          <path d="M2 12l10 5 10-5" stroke="#14a800" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="header__title">Upright</span>
+      </div>
+      <button class="btn btn--icon" id="btn-settings" title="Settings" aria-label="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- ===== Main content ===== -->
+    <main id="app">
+
+      <!-- --- Not-on-proposal-page notice --- -->
+      <div id="view-not-upwork" class="view hidden">
+        <div class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#c5c5c5" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <p>Open an Upwork proposal page to get started.</p>
+          <a href="https://www.upwork.com" target="_blank" class="btn btn--secondary btn--sm">Go to Upwork</a>
+        </div>
+      </div>
+
+      <!-- --- Settings panel --- -->
+      <div id="view-settings" class="view hidden">
+        <section class="section">
+          <h2 class="section__title">Settings</h2>
+          <label class="form-label" for="input-webhook">n8n Webhook URL</label>
+          <input
+            id="input-webhook"
+            class="form-input"
+            type="url"
+            placeholder="https://your-n8n-instance.com/webhook/..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <p class="form-hint">
+            Upright will POST proposal data to this URL and use the response to
+            auto-fill your proposal fields.
+          </p>
+          <div class="btn-row">
+            <button class="btn btn--secondary" id="btn-settings-cancel">Cancel</button>
+            <button class="btn btn--primary" id="btn-settings-save">Save</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- --- Main proposal view --- -->
+      <div id="view-main" class="view hidden">
+
+        <!-- Status bar -->
+        <div id="status-bar" class="status-bar status-bar--info hidden">
+          <span id="status-text"></span>
+        </div>
+
+        <!-- Step 1 – Extract -->
+        <section class="section" id="section-extract">
+          <div class="section__header">
+            <span class="step-badge">1</span>
+            <h2 class="section__title">Proposal Details</h2>
+          </div>
+
+          <div id="extract-placeholder" class="extract-placeholder">
+            <button class="btn btn--primary btn--full" id="btn-extract">
+              Extract Proposal Data
+            </button>
+          </div>
+
+          <div id="proposal-data" class="hidden">
+            <div class="data-row">
+              <span class="data-label">Job</span>
+              <span class="data-value" id="data-job-title">—</span>
+            </div>
+            <div class="data-row">
+              <span class="data-label">Client</span>
+              <span class="data-value" id="data-client">—</span>
+            </div>
+            <div class="data-row">
+              <span class="data-label">Budget</span>
+              <span class="data-value" id="data-budget">—</span>
+            </div>
+            <div class="data-row">
+              <span class="data-label">Cover letter</span>
+              <span class="data-value data-value--badge" id="data-cover-found">—</span>
+            </div>
+            <div class="data-row" id="data-questions-row">
+              <span class="data-label">Questions</span>
+              <span class="data-value" id="data-questions-count">—</span>
+            </div>
+            <button class="btn btn--ghost btn--sm" id="btn-re-extract">Re-extract</button>
+          </div>
+        </section>
+
+        <div class="divider"></div>
+
+        <!-- Step 2 – Loom -->
+        <section class="section" id="section-loom">
+          <div class="section__header">
+            <span class="step-badge">2</span>
+            <h2 class="section__title">Loom Video <span class="optional-tag">optional</span></h2>
+          </div>
+
+          <div id="loom-not-recorded" class="">
+            <button class="btn btn--loom btn--full" id="btn-record-loom">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" fill="#625df5" opacity=".15"/>
+                <circle cx="12" cy="12" r="5" fill="#625df5"/>
+              </svg>
+              Record with Loom
+            </button>
+            <div class="loom-paste-row">
+              <input
+                id="input-loom-url"
+                class="form-input form-input--sm"
+                type="url"
+                placeholder="Or paste a Loom video URL"
+              />
+            </div>
+          </div>
+
+          <div id="loom-recorded" class="loom-recorded hidden">
+            <div class="loom-preview">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#625df5" stroke-width="2">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              <a id="loom-url-display" href="#" target="_blank" class="loom-url-link"></a>
+              <button class="btn btn--icon btn--danger-ghost" id="btn-remove-loom" title="Remove Loom video" aria-label="Remove Loom video">✕</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="divider"></div>
+
+        <!-- Step 3 – Generate & Send -->
+        <section class="section" id="section-send">
+          <div class="section__header">
+            <span class="step-badge">3</span>
+            <h2 class="section__title">Generate Proposal</h2>
+          </div>
+
+          <div id="no-webhook-warning" class="alert alert--warning hidden">
+            No webhook URL set. <button class="alert-link" id="btn-open-settings-from-warning">Add it in settings.</button>
+          </div>
+
+          <button class="btn btn--primary btn--full" id="btn-send" disabled>
+            Send to Webhook
+          </button>
+        </section>
+
+        <div class="divider"></div>
+
+        <!-- Step 4 – Response / Autofill -->
+        <section class="section hidden" id="section-response">
+          <div class="section__header">
+            <span class="step-badge">4</span>
+            <h2 class="section__title">Generated Proposal</h2>
+          </div>
+
+          <div id="response-fields"></div>
+
+          <div class="btn-row btn-row--top">
+            <button class="btn btn--secondary" id="btn-copy-all">Copy All</button>
+            <button class="btn btn--primary" id="btn-autofill">Auto-fill Form</button>
+          </div>
+
+          <div id="autofill-status" class="status-bar hidden"></div>
+        </section>
+
+      </div><!-- /view-main -->
+
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
