@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UpWrite Recorder</title>
+    <link rel="stylesheet" href="recorder.css" />
+  </head>
+  <body>
+    <div id="app">
+
+      <!-- Header -->
+      <header class="r-header">
+        <div class="r-logo">
+          <img src="icons/icon48.png" width="26" height="26" alt="UpWrite" />
+          <span>UpWrite Recorder</span>
+        </div>
+        <button id="btn-close" class="r-close" title="Close" aria-label="Close recorder">✕</button>
+      </header>
+
+      <!-- ─── STATE: idle ─── -->
+      <section id="state-idle" class="r-state">
+        <div class="r-hero">
+          <div class="r-hero-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke="#e94560" stroke-width="2"/>
+              <circle cx="12" cy="12" r="5" fill="#e94560"/>
+            </svg>
+          </div>
+          <h1 class="r-title">Record your screen</h1>
+          <p class="r-subtitle">Capture screen + camera overlay — no subscription needed.</p>
+        </div>
+
+        <div class="r-options">
+          <div class="r-option-row">
+            <span class="r-option-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <path d="M8 21h8M12 17v4"/>
+              </svg>
+              Screen / Window
+            </span>
+            <span class="r-option-required">Required</span>
+          </div>
+
+          <label class="r-option-row r-option-row--toggle" for="opt-camera">
+            <span class="r-option-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M23 7l-7 5 7 5V7z"/>
+                <rect x="1" y="5" width="15" height="14" rx="2"/>
+              </svg>
+              Camera overlay
+            </span>
+            <span class="r-toggle">
+              <input type="checkbox" id="opt-camera" checked />
+              <span class="r-toggle-track"></span>
+            </span>
+          </label>
+
+          <label class="r-option-row r-option-row--toggle" for="opt-mic">
+            <span class="r-option-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
+              </svg>
+              Microphone
+            </span>
+            <span class="r-toggle">
+              <input type="checkbox" id="opt-mic" checked />
+              <span class="r-toggle-track"></span>
+            </span>
+          </label>
+        </div>
+
+        <button id="btn-start" class="r-btn r-btn--start">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"/>
+          </svg>
+          Start Recording
+        </button>
+      </section>
+
+      <!-- ─── STATE: requesting (waiting for browser picker) ─── -->
+      <section id="state-requesting" class="r-state r-state--hidden">
+        <div class="r-loading">
+          <div class="r-spinner"></div>
+          <p>Waiting for screen selection…</p>
+          <p class="r-loading-hint">Pick a screen or window in the browser dialog.</p>
+        </div>
+      </section>
+
+      <!-- ─── STATE: recording ─── -->
+      <section id="state-recording" class="r-state r-state--hidden">
+        <div class="r-recording-ui">
+
+          <div class="r-status-pill">
+            <span class="r-dot"></span>
+            <span class="r-rec-label">REC</span>
+            <span id="r-timer" class="r-timer">00:00</span>
+          </div>
+
+          <!-- Camera PiP bubble -->
+          <div id="r-pip" class="r-pip r-pip--hidden">
+            <video id="vid-cam" autoplay muted playsinline></video>
+          </div>
+
+          <p class="r-rec-hint">
+            Your screen is being recorded.<br/>
+            Switch to any window or tab freely.
+          </p>
+
+          <button id="btn-stop" class="r-btn r-btn--stop">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="4" y="4" width="16" height="16" rx="2"/>
+            </svg>
+            Stop Recording
+          </button>
+        </div>
+      </section>
+
+      <!-- ─── STATE: stopped / preview ─── -->
+      <section id="state-stopped" class="r-state r-state--hidden">
+        <div class="r-preview-wrap">
+          <video id="vid-preview" controls class="r-preview-video"></video>
+          <p id="r-duration" class="r-duration"></p>
+        </div>
+        <div class="r-stopped-actions">
+          <button id="btn-download" class="r-btn r-btn--download">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download Recording
+          </button>
+          <button id="btn-done" class="r-btn r-btn--done">
+            ✓ Done — Return to UpWrite
+          </button>
+          <button id="btn-rerecord" class="r-btn r-btn--ghost">Record again</button>
+        </div>
+      </section>
+
+    </div><!-- /#app -->
+
+    <!-- Hidden stream-processing elements -->
+    <video id="vid-screen" autoplay muted playsinline
+      style="position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;width:1px;height:1px">
+    </video>
+    <canvas id="mix-canvas"
+      style="position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;width:1px;height:1px">
+    </canvas>
+
+    <script src="recorder.js"></script>
+  </body>
+</html>

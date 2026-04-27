@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>UpWrite</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .toast {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 20px;
+      width: 100%;
+      height: 100%;
+      background: #14a800;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toast.error { background: #e94560; }
+
+    .badge {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+
+    .msg { line-height: 1.4; }
+
+    .dismiss {
+      margin-left: auto;
+      font-size: 18px;
+      opacity: 0.7;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const type   = params.get("type") || "success";
+    const msg    = params.get("msg")  || "Done";
+
+    const toast = document.createElement("div");
+    toast.className = "toast" + (type === "error" ? " error" : "");
+
+    const badge = document.createElement("div");
+    badge.className = "badge";
+    badge.textContent = type === "error" ? "✕" : "✓";
+
+    const text = document.createElement("span");
+    text.className = "msg";
+    text.textContent = msg;
+
+    const dismiss = document.createElement("span");
+    dismiss.className = "dismiss";
+    dismiss.textContent = "×";
+
+    toast.appendChild(badge);
+    toast.appendChild(text);
+    toast.appendChild(dismiss);
+    document.body.appendChild(toast);
+
+    toast.addEventListener("click", () => window.close());
+
+    // Auto-close after 8 s with a fade
+    setTimeout(() => {
+      document.body.style.transition = "opacity 0.4s ease";
+      document.body.style.opacity = "0";
+      setTimeout(() => window.close(), 420);
+    }, 8000);
+  </script>
+</body>
+</html>

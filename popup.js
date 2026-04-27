@@ -3,11 +3,9 @@
  *
  * Orchestrates:
  *  1. Settings (webhook URL persistence via chrome.storage.sync)
- *  2. Extraction of proposal data from the active Upwork tab
- *  3. Loom video URL capture
- *  4. Sending the payload to the n8n webhook via background service worker
- *  5. Rendering the AI-generated response fields
- *  6. Auto-filling the proposal form via the content script
+ *  2. Optional video URL capture
+ *  3. Auto-extract proposal data, send to the n8n webhook,
+ *     and auto-fill the form with the AI-generated response
  */
 
 "use strict";
@@ -27,7 +25,7 @@ let state = {
   webhookUrl: "",
   proposalData: null,      // extracted from content script
   webhookResponse: null,   // AI-generated response from n8n
-  loomUrl: "",
+  videoUrl: "",
   activeTabId: null,
 };
 
@@ -124,82 +122,54 @@ function updateWebhookWarning() {
 }
 
 /* ================================================================== */
-/*  Extract proposal                                                    */
+/*  Extract proposal (internal, Promise-based)                          */
 /* ================================================================== */
-function extractProposal() {
-  if (!state.activeTabId) return;
-  showStatus("Extracting proposal data…", "info");
-
-  chrome.tabs.sendMessage(
-    state.activeTabId,
-    { type: "EXTRACT_PROPOSAL" },
-    (response) => {
-      if (chrome.runtime.lastError) {
-        showStatus(
-          "Could not reach the page. Try refreshing the proposal page.",
-          "error"
-        );
-        return;
+function doExtract() {
+  return new Promise((resolve) => {
+    if (!state.activeTabId) return resolve(null);
+    chrome.tabs.sendMessage(
+      state.activeTabId,
+      { type: "EXTRACT_PROPOSAL" },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          showStatus(
+            "Could not reach the page. Try refreshing the proposal page.",
+            "error"
+          );
+          return resolve(null);
+        }
+        if (!response || !response.success) {
+          showStatus(response?.error || "Extraction failed.", "error");
+          return resolve(null);
+        }
+        resolve(response.data);
       }
-      if (!response || !response.success) {
-        showStatus(response?.error || "Extraction failed.", "error");
-        return;
-      }
-      state.proposalData = response.data;
-      renderProposalData(response.data);
-      updateSendButton();
-      clearStatus();
-    }
-  );
-}
-
-function renderProposalData(data) {
-  hide($("extract-placeholder"));
-  show($("proposal-data"));
-
-  $("data-job-title").textContent = data.jobTitle || "—";
-  $("data-job-title").title = data.jobTitle || "";
-
-  $("data-client").textContent = data.clientName || "—";
-  $("data-budget").textContent = data.budget || "—";
-
-  const coverEl = $("data-cover-found");
-  if (data.coverLetter.found) {
-    coverEl.textContent = "Found";
-    coverEl.className = "data-value data-value--badge badge--found";
-  } else {
-    coverEl.textContent = "Not found";
-    coverEl.className = "data-value data-value--badge badge--not-found";
-  }
-
-  const qCount = data.questions.length;
-  $("data-questions-count").textContent = qCount === 0 ? "None" : `${qCount}`;
+    );
+  });
 }
 
 /* ================================================================== */
-/*  Loom video                                                          */
+/*  Screen recording                                                    */
 /* ================================================================== */
-function openLoomRecorder() {
-  // Opens the Loom web recorder in a new tab.
-  // After recording, the user can paste the share URL back.
-  chrome.tabs.create({ url: "https://www.loom.com/record" });
+function openRecorder() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("recorder.html") });
 }
 
-function setLoomUrl(url) {
+function setVideoUrl(url) {
   if (!url) return;
-  state.loomUrl = url.trim();
-  $("loom-url-display").textContent = truncateUrl(state.loomUrl, 38);
-  $("loom-url-display").href = state.loomUrl;
-  show($("loom-recorded"));
-  hide($("loom-not-recorded"));
+  state.videoUrl = url.trim();
+  $("video-url-display").textContent = truncateUrl(state.videoUrl, 38);
+  $("video-url-display").href = state.videoUrl;
+  show($("video-recorded"));
+  hide($("video-not-recorded"));
   updateSendButton();
 }
 
-function removeLoom() {
-  state.loomUrl = "";
-  $("input-loom-url").value = "";
-  hide($("loom-recorded"));
-  show($("loom-not-recorded"));
+function removeVideo() {
+  state.videoUrl = "";
+  $("input-video-url").value = "";
+  hide($("video-recorded"));
+  show($("video-not-recorded"));
   updateSendButton();
 }
 
@@ -208,12 +178,24 @@ function truncateUrl(url, maxLen) {
   return url.slice(0, maxLen - 3) + "…";
 }
 
+async function checkRecordingDone() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["recordingDone"], (items) => {
+      if (items.recordingDone) {
+        show($("record-done-hint"));
+        chrome.storage.local.remove(["recordingDone"]);
+      }
+      resolve();
+    });
+  });
+}
+
 /* ================================================================== */
 /*  Send to webhook                                                     */
 /* ================================================================== */
 function updateSendButton() {
   const btn = $("btn-send");
-  btn.disabled = !state.proposalData || !state.webhookUrl;
+  btn.disabled = !state.webhookUrl;
 }
 
 function buildPayload() {
@@ -238,70 +220,87 @@ function buildPayload() {
         currentValue: q.currentValue,
       })),
     },
-    loomUrl: state.loomUrl || null,
+    videoUrl: state.videoUrl || null,
     sentAt: new Date().toISOString(),
   };
 }
 
-function sendToWebhook() {
-  if (!state.proposalData || !state.webhookUrl) return;
+async function sendToWebhook() {
+  if (!state.webhookUrl) return;
 
   const btn = $("btn-send");
   btn.disabled = true;
-  btn.textContent = "Sending…";
-  showStatus("Sending to webhook…", "info");
+  btn.textContent = "Extracting…";
+  showStatus("Extracting proposal data…", "info");
+
+  const data = await doExtract();
+  if (!data) {
+    btn.textContent = "Generate Proposal";
+    updateSendButton();
+    return;
+  }
+  state.proposalData = data;
+
+  // Disable the button for 5 seconds after sending
+  btn.disabled = true;
+  btn.textContent = "Please wait…";
+  setTimeout(() => {
+    btn.textContent = "Generate Proposal";
+    updateSendButton();
+  }, 5000);
+
+  showStatus("Sent to AI — working in the background. You can close this popup.", "success");
 
   const payload = buildPayload();
 
-  chrome.runtime.sendMessage(
-    { type: "SEND_WEBHOOK", url: state.webhookUrl, payload },
-    (response) => {
-      btn.textContent = "Send to Webhook";
-      updateSendButton();
+  // Write the job to storage. The background picks it up via storage.onChanged,
+  // which is immune to the popup closing (unlike sendMessage which dies with the port).
+  chrome.storage.local.set({
+    upwrite_pending: {
+      tabId:      state.activeTabId,
+      webhookUrl: state.webhookUrl,
+      payload,
+    },
+  });
+}
 
-      if (!response || !response.success) {
-        showStatus(
-          `Webhook error: ${response?.error || "Unknown error"}`,
-          "error"
-        );
-        return;
-      }
-
-      showStatus("Response received!", "success");
-      state.webhookResponse = response.data;
-      renderResponse(response.data);
-    }
-  );
+function extractString(v) {
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object") {
+    return v.answer || v.text || v.value || v.content || JSON.stringify(v);
+  }
+  return String(v ?? "");
 }
 
 /* ================================================================== */
 /*  Render webhook response                                             */
 /* ================================================================== */
 function renderResponse(data) {
-  const container = $("response-fields");
-  container.innerHTML = "";
+  // Unwrap n8n's single-element array wrapper
+  if (Array.isArray(data) && data.length === 1 &&
+      data[0] !== null && typeof data[0] === "object" && !Array.isArray(data[0])) {
+    data = data[0];
+  }
 
-  // Normalise: the webhook can return various shapes.
-  // Expected shape: { coverLetter: string, questions: string[] }
-  // But we also handle arrays and plain strings gracefully.
   let coverLetter = "";
-  let questions = [];
+  let questions   = [];
 
   if (typeof data === "string") {
     coverLetter = data;
   } else if (Array.isArray(data)) {
-    // Treat first item as cover letter, rest as question answers
-    [coverLetter, ...questions] = data;
+    const [first, ...rest] = data;
+    coverLetter = extractString(first);
+    questions   = rest.map(extractString);
   } else if (data && typeof data === "object") {
-    // Accept camelCase (coverLetter), snake_case (cover_letter), or generic "text"
-    // to stay compatible with different n8n workflow output node configurations.
-    coverLetter = data.coverLetter || data.cover_letter || data.text || "";
-    if (Array.isArray(data.questions)) {
-      questions = data.questions;
-    } else if (Array.isArray(data.answers)) {
-      questions = data.answers;
-    }
+    coverLetter = extractString(
+      data.coverLetter ?? data.cover_letter ?? data.text ?? data.output ?? ""
+    );
+    const rawQ = data.questions ?? data.answers ?? data.questionAnswers ?? [];
+    if (Array.isArray(rawQ)) questions = rawQ.map(extractString);
   }
+
+  const container = $("response-fields");
+  container.innerHTML = "";
 
   // Store normalised for autofill
   state.webhookResponse = { coverLetter, questions };
@@ -378,39 +377,47 @@ function copyAll() {
 }
 
 /* ================================================================== */
-/*  Auto-fill                                                           */
+/*  Handle background-completed response                                */
 /* ================================================================== */
-function autofillForm() {
-  if (!state.webhookResponse || !state.activeTabId) return;
-
-  const btn = $("btn-autofill");
-  btn.disabled = true;
-  btn.textContent = "Filling…";
-
-  chrome.tabs.sendMessage(
-    state.activeTabId,
-    { type: "AUTOFILL_PROPOSAL", payload: state.webhookResponse },
-    (response) => {
-      btn.disabled = false;
-      btn.textContent = "Auto-fill Form";
-
-      const autofillStatus = $("autofill-status");
-      if (chrome.runtime.lastError || !response || !response.success) {
-        autofillStatus.textContent =
-          response?.error || "Auto-fill failed. Refresh the page and try again.";
-        autofillStatus.className = "status-bar status-bar--error";
-        show(autofillStatus);
-        return;
-      }
-
-      const filled = response.results.length;
-      autofillStatus.textContent = `✓ ${filled} field${filled !== 1 ? "s" : ""} filled successfully.`;
-      autofillStatus.className = "status-bar status-bar--success";
-      show(autofillStatus);
-      setTimeout(() => hide(autofillStatus), 3000);
-    }
-  );
+function handleStoredResponse(stored) {
+  if (stored.error) {
+    showStatus(`Webhook error: ${stored.error}`, "error");
+    return;
+  }
+  if (stored.raw !== undefined) {
+    renderResponse(stored.raw);
+    showStatus("Proposal generated and form filled!", "success");
+    setTimeout(clearStatus, 4000);
+  }
 }
+
+async function checkPendingResponse() {
+  if (!state.activeTabId) return;
+  const key = `response_${state.activeTabId}`;
+  return new Promise((resolve) => {
+    chrome.storage.local.get([key], (items) => {
+      if (items[key]) {
+        const stored = items[key];
+        chrome.storage.local.remove([key]);
+        handleStoredResponse(stored);
+      }
+      resolve();
+    });
+  });
+}
+
+/* ================================================================== */
+/*  Live storage listener — updates popup if it stays open while AI    */
+/*  is working in the background                                        */
+/* ================================================================== */
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !state.activeTabId) return;
+  const key = `response_${state.activeTabId}`;
+  if (!changes[key]?.newValue) return;
+  const stored = changes[key].newValue;
+  chrome.storage.local.remove([key]);
+  handleStoredResponse(stored);
+});
 
 /* ================================================================== */
 /*  Event listeners                                                     */
@@ -418,6 +425,13 @@ function autofillForm() {
 document.addEventListener("DOMContentLoaded", async () => {
   await loadSettings();
   await initView();
+  await checkRecordingDone();
+  await checkPendingResponse();
+
+  // Clear any badge the background set for this tab
+  if (state.activeTabId) {
+    chrome.action.setBadgeText({ text: "", tabId: state.activeTabId });
+  }
 
   /* -- Header -- */
   $("btn-settings").addEventListener("click", () => showSettingsPanel(true));
@@ -428,33 +442,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     showSettingsPanel(false)
   );
 
-  /* -- Extract -- */
-  $("btn-extract").addEventListener("click", extractProposal);
-  $("btn-re-extract").addEventListener("click", () => {
-    state.proposalData = null;
-    hide($("proposal-data"));
-    show($("extract-placeholder"));
-    hide($("section-response"));
-    updateSendButton();
-  });
-
-  /* -- Loom -- */
-  $("btn-record-loom").addEventListener("click", openLoomRecorder);
-  $("input-loom-url").addEventListener("change", (e) => {
+  /* -- Recording -- */
+  $("btn-start-recording").addEventListener("click", openRecorder);
+  $("input-video-url").addEventListener("change", (e) => {
     const url = e.target.value.trim();
     try {
-      const parsed = new URL(url);
-      if (
-        parsed.hostname === "loom.com" ||
-        parsed.hostname.endsWith(".loom.com")
-      ) {
-        setLoomUrl(url);
+      new URL(url); // validate
+      if (url) {
+        setVideoUrl(url);
       }
     } catch (_) {
       // ignore invalid URLs
     }
   });
-  $("btn-remove-loom").addEventListener("click", removeLoom);
+  $("btn-remove-video").addEventListener("click", removeVideo);
 
   /* -- Send -- */
   $("btn-send").addEventListener("click", sendToWebhook);
@@ -464,5 +465,4 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   /* -- Response -- */
   $("btn-copy-all").addEventListener("click", copyAll);
-  $("btn-autofill").addEventListener("click", autofillForm);
 });

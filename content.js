@@ -17,6 +17,7 @@
   /* ------------------------------------------------------------------ */
   const SELECTORS = {
     jobTitle: [
+      "h3.h5",           // observed DOM: <h3 class="mb-6x h5">
       "h1.job-title",
       "[data-test='job-title']",
       "[data-qa='job-title']",
@@ -24,11 +25,19 @@
       "h1",
     ],
     jobDescription: [
+      // Upwork proposal page – specific class from observed DOM
+      "div.description.text-body-sm",
       "[data-test='description']",
       "[data-qa='description']",
       ".job-description",
       "[class*='description']",
       "[class*='job-details']",
+    ],
+    // "more" button inside the air3 truncation widget
+    descriptionMoreBtn: [
+      "div.description button.air3-truncation-btn[aria-expanded='false']",
+      "button.air3-truncation-btn[aria-expanded='false']",
+      "button[data-ev-label='truncation_toggle'][aria-expanded='false']",
     ],
     clientName: [
       "[data-test='client-name']",
@@ -138,10 +147,38 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /*  expandDescription()                                                 */
+  /*  Clicks the "more" truncation button (if present) and waits until    */
+  /*  aria-expanded becomes "true" before resolving.                      */
+  /* ------------------------------------------------------------------ */
+  function expandDescription() {
+    return new Promise((resolve) => {
+      const btn = queryFirst(SELECTORS.descriptionMoreBtn);
+      if (!btn) return resolve(); // already expanded or button not found
+
+      // Listen for the attribute flip so we know the content is visible
+      const observer = new MutationObserver(() => {
+        if (btn.getAttribute("aria-expanded") === "true") {
+          observer.disconnect();
+          resolve();
+        }
+      });
+      observer.observe(btn, { attributes: true, attributeFilter: ["aria-expanded"] });
+
+      btn.click();
+
+      // Safety timeout: resolve after 1 s even if the attribute never flips
+      setTimeout(() => { observer.disconnect(); resolve(); }, 1000);
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
   /*  extractProposal()                                                   */
   /*  Returns a structured object with all proposal-page data.            */
   /* ------------------------------------------------------------------ */
-  function extractProposal() {
+  async function extractProposal() {
+    await expandDescription();
+
     const jobTitle = getText(queryFirst(SELECTORS.jobTitle));
     const jobDescription = getText(queryFirst(SELECTORS.jobDescription));
     const clientName = getText(queryFirst(SELECTORS.clientName));
@@ -232,13 +269,13 @@
   /*  Message listener                                                     */
   /* ------------------------------------------------------------------ */
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (!isContextValid()) return false;
+
     if (message.type === "EXTRACT_PROPOSAL") {
-      try {
-        sendResponse({ success: true, data: extractProposal() });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-      return true;
+      extractProposal()
+        .then((data) => sendResponse({ success: true, data }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true; // keep message channel open for async response
     }
 
     if (message.type === "AUTOFILL_PROPOSAL") {
@@ -253,12 +290,63 @@
   });
 
   /* ------------------------------------------------------------------ */
+  /*  Extension context guard                                             */
+  /*  After a reload, the old content script stays on the page but its   */
+  /*  Chrome API access is revoked. Any chrome.* call will throw          */
+  /*  "Extension context invalidated". This helper lets callers detect   */
+  /*  that state and bail out cleanly.                                    */
+  /* ------------------------------------------------------------------ */
+  function isContextValid() {
+    try {
+      // Accessing chrome.runtime.id throws when the context is dead
+      return !!chrome.runtime?.id;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Pending autofill check (storage fallback for discarded tabs)        */
+  /* ------------------------------------------------------------------ */
+  let myTabId = null;
+
+  function checkPendingAutofill() {
+    if (!myTabId || !isContextValid()) return;
+    const key = `autofill_${myTabId}`;
+    try {
+      chrome.storage.local.get([key], (items) => {
+        if (chrome.runtime.lastError) return;
+        if (items[key]) {
+          autofill(items[key]);
+          try { chrome.storage.local.remove([key]); } catch (_) {}
+        }
+      });
+    } catch (_) {
+      // Context invalidated between the guard check and the API call — ignore
+    }
+  }
+
+  // When the user switches back to this tab, pick up any pending autofill
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkPendingAutofill();
+  });
+
+  /* ------------------------------------------------------------------ */
   /*  Signal that the content script is ready                             */
   /* ------------------------------------------------------------------ */
-  chrome.runtime.sendMessage(
-    { type: "CONTENT_SCRIPT_READY", url: window.location.href },
-    () => {
-      if (chrome.runtime.lastError) { /* intentionally ignored during startup */ }
-    }
-  );
+  try {
+    chrome.runtime.sendMessage(
+      { type: "CONTENT_SCRIPT_READY", url: window.location.href },
+      (response) => {
+        if (chrome.runtime.lastError) return;
+        if (response?.tabId) {
+          myTabId = response.tabId;
+          // Check immediately in case autofill data arrived before this script loaded
+          checkPendingAutofill();
+        }
+      }
+    );
+  } catch (_) {
+    // Context already invalid at startup — nothing to do
+  }
 })();

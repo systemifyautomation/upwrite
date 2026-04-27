@@ -187,12 +187,12 @@ body {
 }
 .btn--danger-ghost:hover:not(:disabled) { background: #fff1f0; }
 
-.btn--loom {
-  background: #f0effe;
-  color: var(--color-loom);
-  border: 1px solid #d6d3fc;
+.btn--record {
+  background: rgba(233, 69, 96, .1);
+  color: #e94560;
+  border: 1px solid rgba(233, 69, 96, .3);
 }
-.btn--loom:hover:not(:disabled) { background: #e4e1fd; }
+.btn--record:hover:not(:disabled) { background: rgba(233, 69, 96, .18); }
 
 .btn--full { width: 100%; }
 
@@ -347,31 +347,44 @@ body {
 /* ---------- Extract placeholder ---------- */
 .extract-placeholder { text-align: center; }
 
-/* ---------- Loom ---------- */
-.loom-paste-row {
+/* ---------- Recording ---------- */
+.video-paste-row {
   margin-top: 7px;
 }
 
-.loom-preview {
+.record-done-hint {
+  font-size: 11px;
+  color: var(--color-success-text);
+  background: var(--color-success-bg);
+  border: 1px solid var(--color-success-border);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+  margin-top: 7px;
+  margin-bottom: 2px;
+}
+
+.video-recorded { }
+
+.video-preview {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: #f0effe;
-  border: 1px solid #d6d3fc;
+  background: rgba(233, 69, 96, .07);
+  border: 1px solid rgba(233, 69, 96, .25);
   border-radius: var(--radius);
 }
 
-.loom-url-link {
+.video-url-link {
   flex: 1;
   font-size: 12px;
-  color: var(--color-loom);
+  color: #e94560;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-decoration: none;
 }
-.loom-url-link:hover { text-decoration: underline; }
+.video-url-link:hover { text-decoration: underline; }
 
 /* ---------- Response fields ---------- */
 .response-field {

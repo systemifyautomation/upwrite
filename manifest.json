@@ -36,9 +36,13 @@
   "permissions": [
     "activeTab",
     "storage",
-    "scripting"
+    "scripting",
+    "alarms",
+    "offscreen",
+    "notifications"
   ],
   "host_permissions": [
-    "https://www.upwork.com/*"
+    "https://www.upwork.com/*",
+    "<all_urls>"
   ]
 }
