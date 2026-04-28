@@ -23,9 +23,13 @@ const isHidden = (el) => el && el.classList.contains("hidden");
 /* ================================================================== */
 let state = {
   webhookUrl: "",
+  clientName: "",
   proposalData: null,      // extracted from content script
   webhookResponse: null,   // AI-generated response from n8n
   videoUrl: "",
+  videoBlob: null,         // recorded Blob (stored in IDB, loaded on demand)
+  videoBlobUrl: null,      // object URL for the preview <video>
+  hasVideo: false,
   activeTabId: null,
 };
 
@@ -151,26 +155,129 @@ function doExtract() {
 /* ================================================================== */
 /*  Screen recording                                                    */
 /* ================================================================== */
+
+/** Load the recording buffer from chrome.storage.local.
+ *  Content scripts write it there; popup and background SW read from it.
+ *  This avoids all cross-realm ArrayBuffer issues that arise when going
+ *  through IDB across different execution contexts.
+ */
+async function loadRecordingFromStorage() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get("upwrite_recording", (items) => {
+      const rec = items.upwrite_recording;
+      if (!rec || !rec.buffer) return resolve(null);
+      try {
+        const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
+        resolve({ ...rec, blob });
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  });
+}
+
+function formatDuration(secs) {
+  const m = String(Math.floor(secs / 60)).padStart(2, "0");
+  const s = String(secs % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function checkAndShowRecording() {
+  const rec = await loadRecordingFromStorage();
+  if (!rec) return;
+  showRecordedVideo(rec.blob, rec.duration, rec.size);
+}
+
+function showRecordedVideo(blob, duration, size) {
+  // Revoke any previous object URL to avoid memory leaks
+  if (state.videoBlobUrl) {
+    URL.revokeObjectURL(state.videoBlobUrl);
+    state.videoBlobUrl = null;
+  }
+  state.videoBlob    = blob;
+  state.videoBlobUrl = URL.createObjectURL(blob);
+  state.hasVideo     = true;
+
+  const preview = $("video-preview");
+  if (preview) {
+    preview.src = state.videoBlobUrl;
+    preview.load();
+  }
+
+  const meta = $("video-meta");
+  if (meta) {
+    const parts = [];
+    if (duration) parts.push(`Duration: ${formatDuration(duration)}`);
+    if (size)     parts.push(`Size: ${formatBytes(size)}`);
+    meta.textContent = parts.join("  ·  ");
+  }
+
+  hide($("video-url-display"));
+  show($("video-recorded"));
+  hide($("video-not-recorded"));
+  updateSendButton();
+}
+
 function openRecorder() {
-  chrome.tabs.create({ url: chrome.runtime.getURL("recorder.html") });
+  if (!state.activeTabId) return;
+  // Open recorder.html as a floating popup window (no tab strip) via background SW
+  chrome.runtime.sendMessage({ type: "OPEN_RECORDER", tabId: state.activeTabId });
+  // Close the popup so the user can interact with the screen picker
+  window.close();
 }
 
 function setVideoUrl(url) {
   if (!url) return;
-  state.videoUrl = url.trim();
-  $("video-url-display").textContent = truncateUrl(state.videoUrl, 38);
-  $("video-url-display").href = state.videoUrl;
+  state.videoUrl  = url.trim();
+  state.hasVideo  = true;
+  state.videoBlob = null;
+  if (state.videoBlobUrl) {
+    URL.revokeObjectURL(state.videoBlobUrl);
+    state.videoBlobUrl = null;
+  }
+
+  const display = $("video-url-display");
+  if (display) {
+    display.textContent = truncateUrl(state.videoUrl, 38);
+    display.href = state.videoUrl;
+    display.classList.remove("hidden");
+  }
+
+  const preview = $("video-preview");
+  if (preview) {
+    preview.src = state.videoUrl;
+  }
+
   show($("video-recorded"));
   hide($("video-not-recorded"));
   updateSendButton();
 }
 
 function removeVideo() {
-  state.videoUrl = "";
+  if (state.videoBlobUrl) {
+    URL.revokeObjectURL(state.videoBlobUrl);
+    state.videoBlobUrl = null;
+  }
+  state.videoUrl  = "";
+  state.videoBlob = null;
+  state.hasVideo  = false;
   $("input-video-url").value = "";
+
+  const preview = $("video-preview");
+  if (preview) { preview.src = ""; preview.load(); }
+
   hide($("video-recorded"));
   show($("video-not-recorded"));
   updateSendButton();
+
+  // Remove from extension storage and background state
+  chrome.runtime.sendMessage({ type: "DELETE_RECORDING" });
+  chrome.storage.local.remove("upwrite_recording");
 }
 
 function truncateUrl(url, maxLen) {
@@ -180,15 +287,33 @@ function truncateUrl(url, maxLen) {
 
 async function checkRecordingDone() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["recordingDone"], (items) => {
-      if (items.recordingDone) {
+    chrome.storage.local.get(["upwrite_recording_meta", "upwrite_recording_error"], (items) => {
+      if (items.upwrite_recording_meta) {
         show($("record-done-hint"));
-        chrome.storage.local.remove(["recordingDone"]);
+        chrome.storage.local.remove(["upwrite_recording_meta"]);
+      }
+      if (items.upwrite_recording_error) {
+        showStatus(items.upwrite_recording_error, "error");
+        chrome.storage.local.remove(["upwrite_recording_error"]);
       }
       resolve();
     });
   });
 }
+
+// Listen for recording-done while popup is open
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.upwrite_recording_meta?.newValue) {
+    show($("record-done-hint"));
+    chrome.storage.local.remove(["upwrite_recording_meta"]);
+    checkAndShowRecording();
+  }
+  if (changes.upwrite_recording_error?.newValue) {
+    showStatus(changes.upwrite_recording_error.newValue, "error");
+    chrome.storage.local.remove(["upwrite_recording_error"]);
+  }
+});
 
 /* ================================================================== */
 /*  Send to webhook                                                     */
@@ -206,7 +331,7 @@ function buildPayload() {
     job: {
       title: data.jobTitle,
       description: data.jobDescription,
-      clientName: data.clientName,
+      clientName: state.clientName || data.clientName,
       budget: data.budget,
     },
     proposal: {
@@ -220,6 +345,7 @@ function buildPayload() {
         currentValue: q.currentValue,
       })),
     },
+    // Include video URL only when it was pasted manually (not a local blob)
     videoUrl: state.videoUrl || null,
     sentAt: new Date().toISOString(),
   };
@@ -260,6 +386,9 @@ async function sendToWebhook() {
       tabId:      state.activeTabId,
       webhookUrl: state.webhookUrl,
       payload,
+      // state.videoBlob is a Blob and cannot be serialized into chrome.storage.
+      // The blob is already in IndexedDB — hasVideo just tells the SW to fetch it.
+      hasVideo:   state.hasVideo,
     },
   });
 }
@@ -427,6 +556,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   await initView();
   await checkRecordingDone();
   await checkPendingResponse();
+  // Load any previously recorded video from IndexedDB
+  await checkAndShowRecording();
 
   // Clear any badge the background set for this tab
   if (state.activeTabId) {
@@ -456,6 +587,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
   $("btn-remove-video").addEventListener("click", removeVideo);
+
+  /* -- Client name -- */
+  $("input-client-name").addEventListener("input", (e) => {
+    state.clientName = e.target.value.trim();
+  });
 
   /* -- Send -- */
   $("btn-send").addEventListener("click", sendToWebhook);

@@ -210,6 +210,10 @@ body {
 .btn-row--top { margin-top: 12px; }
 
 /* ---------- Forms ---------- */
+.form-field {
+  margin-bottom: 12px;
+}
+
 .form-label {
   display: block;
   font-size: 12px;
@@ -364,6 +368,28 @@ body {
 }
 
 .video-recorded { }
+
+.video-preview-player {
+  width: 100%;
+  max-height: 160px;
+  border-radius: var(--radius);
+  background: #000;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.video-meta {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.video-preview-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .video-preview {
   display: flex;

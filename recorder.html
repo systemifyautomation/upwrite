@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -121,18 +121,10 @@
       <!-- ─── STATE: stopped / preview ─── -->
       <section id="state-stopped" class="r-state r-state--hidden">
         <div class="r-preview-wrap">
-          <video id="vid-preview" controls class="r-preview-video"></video>
           <p id="r-duration" class="r-duration"></p>
+          <p class="r-saved-hint">✓ Recording saved — return to UpWrite to send it.</p>
         </div>
         <div class="r-stopped-actions">
-          <button id="btn-download" class="r-btn r-btn--download">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-            Download Recording
-          </button>
           <button id="btn-done" class="r-btn r-btn--done">
             ✓ Done — Return to UpWrite
           </button>
@@ -142,13 +134,8 @@
 
     </div><!-- /#app -->
 
-    <!-- Hidden stream-processing elements -->
-    <video id="vid-screen" autoplay muted playsinline
-      style="position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;width:1px;height:1px">
-    </video>
-    <canvas id="mix-canvas"
-      style="position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;width:1px;height:1px">
-    </canvas>
+    <!-- Error display (shown in idle state on failure) -->
+    <div id="r-error" class="r-error r-state--hidden"></div>
 
     <script src="recorder.js"></script>
   </body>

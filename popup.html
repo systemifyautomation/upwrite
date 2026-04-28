@@ -73,51 +73,88 @@
           <span id="status-text"></span>
         </div>
 
-        <!-- Step 1 – Screen Recording -->
-        <section class="section" id="section-record">
+        <!-- Step 1 – Extract -->
+        <section class="section" id="section-extract">
           <div class="section__header">
             <span class="step-badge">1</span>
-            <h2 class="section__title">Screen Recording <span class="optional-tag">optional</span></h2>
+            <h2 class="section__title">Proposal Details</h2>
           </div>
 
-          <div id="video-not-recorded">
-            <button class="btn btn--record btn--full" id="btn-start-recording">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" fill="#e94560" opacity=".18"/>
-                <circle cx="12" cy="12" r="5" fill="#e94560"/>
-              </svg>
-              Start Recording
+          <div id="extract-placeholder" class="extract-placeholder">
+            <button class="btn btn--primary btn--full" id="btn-extract">
+              Extract Proposal Data
             </button>
-            <div id="record-done-hint" class="record-done-hint hidden">
-              ✓ Recording downloaded — upload it and paste the URL below.
+          </div>
+
+          <div id="proposal-data" class="hidden">
+            <div class="data-row">
+              <span class="data-label">Job</span>
+              <span class="data-value" id="data-job-title">—</span>
             </div>
-            <div class="video-paste-row">
+            <div class="data-row">
+              <span class="data-label">Client</span>
+              <span class="data-value" id="data-client">—</span>
+            </div>
+            <div class="data-row">
+              <span class="data-label">Budget</span>
+              <span class="data-value" id="data-budget">—</span>
+            </div>
+            <div class="data-row">
+              <span class="data-label">Cover letter</span>
+              <span class="data-value data-value--badge" id="data-cover-found">—</span>
+            </div>
+            <div class="data-row" id="data-questions-row">
+              <span class="data-label">Questions</span>
+              <span class="data-value" id="data-questions-count">—</span>
+            </div>
+            <button class="btn btn--ghost btn--sm" id="btn-re-extract">Re-extract</button>
+          </div>
+        </section>
+
+        <div class="divider"></div>
+
+        <!-- Step 2 – Loom -->
+        <section class="section" id="section-loom">
+          <div class="section__header">
+            <span class="step-badge">2</span>
+            <h2 class="section__title">Loom Video <span class="optional-tag">optional</span></h2>
+          </div>
+
+          <div id="loom-not-recorded" class="">
+            <button class="btn btn--loom btn--full" id="btn-record-loom">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" fill="#625df5" opacity=".15"/>
+                <circle cx="12" cy="12" r="5" fill="#625df5"/>
+              </svg>
+              Record with Loom
+            </button>
+            <div class="loom-paste-row">
               <input
-                id="input-video-url"
+                id="input-loom-url"
                 class="form-input form-input--sm"
                 type="url"
-                placeholder="Or paste a video URL"
+                placeholder="Or paste a Loom video URL"
               />
             </div>
           </div>
 
-          <div id="video-recorded" class="video-recorded hidden">
-            <div class="video-preview">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e94560" stroke-width="2" aria-hidden="true">
+          <div id="loom-recorded" class="loom-recorded hidden">
+            <div class="loom-preview">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#625df5" stroke-width="2">
                 <polygon points="5 3 19 12 5 21 5 3"/>
               </svg>
-              <a id="video-url-display" href="#" target="_blank" class="video-url-link"></a>
-              <button class="btn btn--icon btn--danger-ghost" id="btn-remove-video" title="Remove video" aria-label="Remove video">✕</button>
+              <a id="loom-url-display" href="#" target="_blank" class="loom-url-link"></a>
+              <button class="btn btn--icon btn--danger-ghost" id="btn-remove-loom" title="Remove Loom video" aria-label="Remove Loom video">✕</button>
             </div>
           </div>
         </section>
 
         <div class="divider"></div>
 
-        <!-- Step 2 – Generate & Send -->
+        <!-- Step 3 – Generate & Send -->
         <section class="section" id="section-send">
           <div class="section__header">
-            <span class="step-badge">2</span>
+            <span class="step-badge">3</span>
             <h2 class="section__title">Generate Proposal</h2>
           </div>
 
@@ -126,16 +163,16 @@
           </div>
 
           <button class="btn btn--primary btn--full" id="btn-send" disabled>
-            Generate Proposal
+            Send to Webhook
           </button>
         </section>
 
         <div class="divider"></div>
 
-        <!-- Step 3 – Response / Autofill -->
+        <!-- Step 4 – Response / Autofill -->
         <section class="section hidden" id="section-response">
           <div class="section__header">
-            <span class="step-badge">3</span>
+            <span class="step-badge">4</span>
             <h2 class="section__title">Generated Proposal</h2>
           </div>
 
@@ -143,6 +180,7 @@
 
           <div class="btn-row btn-row--top">
             <button class="btn btn--secondary" id="btn-copy-all">Copy All</button>
+            <button class="btn btn--primary" id="btn-autofill">Auto-fill Form</button>
           </div>
 
           <div id="autofill-status" class="status-bar hidden"></div>

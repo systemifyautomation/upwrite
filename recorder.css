@@ -86,6 +86,26 @@ body {
 .r-state { padding: 28px 24px; }
 .r-state--hidden { display: none !important; }
 
+/* ── Error bar ── */
+.r-error {
+  margin: 0 24px 16px;
+  padding: 10px 14px;
+  background: var(--red-dim);
+  border: 1px solid var(--red-border);
+  border-radius: var(--radius);
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* ── Saved hint ── */
+.r-saved-hint {
+  color: var(--green);
+  font-size: 14px;
+  text-align: center;
+  margin-top: 8px;
+}
+
 /* ── Idle ── */
 .r-hero {
   text-align: center;

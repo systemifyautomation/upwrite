@@ -57,6 +57,7 @@
     const params = new URLSearchParams(location.search);
     const type   = params.get("type") || "success";
     const msg    = params.get("msg")  || "Done";
+    const tabId  = params.get("tabId") ? parseInt(params.get("tabId"), 10) : null;
 
     const toast = document.createElement("div");
     toast.className = "toast" + (type === "error" ? " error" : "");
@@ -78,14 +79,19 @@
     toast.appendChild(dismiss);
     document.body.appendChild(toast);
 
-    toast.addEventListener("click", () => window.close());
+    toast.addEventListener("click", () => {
+      if (tabId !== null) {
+        chrome.runtime.sendMessage({ type: "FOCUS_TAB", tabId });
+      }
+      window.close();
+    });
 
-    // Auto-close after 8 s with a fade
+    // Auto-close after 10 s with a fade
     setTimeout(() => {
       document.body.style.transition = "opacity 0.4s ease";
       document.body.style.opacity = "0";
       setTimeout(() => window.close(), 420);
-    }, 8000);
+    }, 10000);
   </script>
 </body>
 </html>

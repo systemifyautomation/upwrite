@@ -112,38 +112,134 @@ function autofillInTab(payload) {
 /*  Uses the OS notification system so the alert appears even when the  */
 /*  user is in a different browser, app, or the file manager.           */
 /* ------------------------------------------------------------------ */
-function showNotificationWindow(message, type /* "success" | "error" */) {
-  const id = `upwrite-${Date.now()}`;
-  chrome.notifications.create(id, {
-    type:             "basic",
-    iconUrl:          chrome.runtime.getURL("icons/icon128.png"),
-    title:            "UpWrite",
-    message:          message,
-    requireInteraction: true,   // stays on screen until dismissed
-  }).catch((err) => {
-    // Surface errors in the service worker console for easier debugging
-    console.error("[UpWrite] Notification failed:", err);
+
+// Maps notification ID → proposal tabId so the click handler can focus it.
+const notifTabMap = new Map();
+
+async function showNotificationWindow(message, type /* "success" | "error" */, tabId = null) {
+  const notifId = `upwrite_${Date.now()}`;
+  if (tabId != null) notifTabMap.set(notifId, tabId);
+
+  await chrome.notifications.create(notifId, {
+    type:    "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title:   type === "error" ? "UpWrite – Error" : "UpWrite – Proposal Ready",
+    message,
+  });
+
+  // Auto-clear after 10 seconds
+  setTimeout(() => {
+    chrome.notifications.clear(notifId);
+    notifTabMap.delete(notifId);
+  }, 10000);
+}
+
+// Click → focus the proposal tab
+chrome.notifications.onClicked.addListener((notifId) => {
+  chrome.notifications.clear(notifId);
+  const tabId = notifTabMap.get(notifId);
+  notifTabMap.delete(notifId);
+  if (tabId == null) return;
+  chrome.tabs.update(tabId, { active: true }, () => {
+    if (chrome.runtime.lastError) return;
+    chrome.tabs.get(tabId, (tab) => {
+      if (!chrome.runtime.lastError && tab?.windowId) {
+        chrome.windows.update(tab.windowId, { focused: true });
+      }
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Recording state                                                      */
+/* ------------------------------------------------------------------ */
+// Tab where the recorder overlay is currently injected.
+let activeOverlayTabId = null;
+
+
+
+/* ------------------------------------------------------------------ */
+/*  IndexedDB helpers (SW shares origin with recorder.html)             */
+/* ------------------------------------------------------------------ */
+function openSwDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("upwrite-db", 1);
+    req.onupgradeneeded = (e) => e.target.result.createObjectStore("recordings");
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror   = (e) => reject(e.target.error);
   });
 }
 
+async function getRecordingFromIDB() {
+  const db = await openSwDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction("recordings", "readonly");
+    const req = tx.objectStore("recordings").get("current");
+    req.onsuccess = (e) => {
+      const rec = e.target.result;
+      if (!rec) return resolve(null);
+      // Duck-type check instead of instanceof to handle cross-realm ArrayBuffers.
+      let blob;
+      if (rec.buffer && rec.buffer.byteLength > 0) {
+        blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
+      } else if (rec.blob && rec.blob.size > 0) {
+        blob = rec.blob;
+      } else {
+        return resolve(null); // unreadable or empty record
+      }
+      resolve({ ...rec, blob });
+    };
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+async function deleteRecordingFromIDB() {
+  const db = await openSwDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction("recordings", "readwrite");
+    tx.objectStore("recordings").delete("current");
+    tx.oncomplete = () => resolve();
+  });
+}
+
+// recorder-overlay.js handles recording entirely in the content-script
+// context — no IDB access needed here for chunk streaming.
+
 /* ------------------------------------------------------------------ */
-/*  Chime player — offscreen document plays a two-note audio chime      */
+/*  Offscreen document management                                        */
+/*  One document is kept alive during recording; re-created for chimes.  */
 /* ------------------------------------------------------------------ */
-async function playChime() {
+
+/**
+ * Ensure the offscreen document exists.
+ * reasons: array — e.g. ["DISPLAY_MEDIA", "AUDIO_PLAYBACK"]
+ * When recording is active the doc is already open with DISPLAY_MEDIA;
+ * we keep it alive so the chime can play in the same doc.
+ */
+async function ensureOffscreenDoc(reasons, justification) {
   try {
-    // Only one offscreen document can exist at a time; create if not present
-    await chrome.offscreen.createDocument({
-      url:           chrome.runtime.getURL("offscreen.html"),
-      reasons:       ["AUDIO_PLAYBACK"],
-      justification: "Play proposal-ready notification chime.",
-    });
-    // Document auto-plays on load. CHIME_DONE message closes it (see below).
+    const exists = await chrome.offscreen.hasDocument().catch(() => false);
+    if (!exists) {
+      await chrome.offscreen.createDocument({
+        url:    chrome.runtime.getURL("offscreen.html"),
+        reasons,
+        justification,
+      });
+    }
   } catch (_) {
-    // Document already exists or offscreen API unavailable — non-fatal
+    // Already exists or API unavailable — non-fatal
   }
 }
 
-/* CHIME_DONE from offscreen.js closes the document once sound finishes */
+/* ------------------------------------------------------------------ */
+/*  Chime player                                                         */
+/* ------------------------------------------------------------------ */
+async function playChime() {
+  // Re-use the offscreen doc if it already exists (e.g. during recording).
+  // Otherwise create one just for audio playback.
+  await ensureOffscreenDoc(["AUDIO_PLAYBACK"], "Play proposal-ready notification chime.");
+  chrome.runtime.sendMessage({ target: "offscreen", type: "PLAY_CHIME" }).catch(() => {});
+}
 
 /* ------------------------------------------------------------------ */
 /*  Alarm keepalive                                                      */
@@ -172,16 +268,32 @@ chrome.storage.onChanged.addListener((changes, area) => {
   processProposal(job);
 });
 
-async function processProposal({ tabId, webhookUrl, payload }) {
+async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
   // Start the keepalive alarm — cleared in the finally block
   chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 });
 
   try {
-    const res = await fetch(webhookUrl, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify(payload),
-    });
+    // Always send multipart/form-data so n8n receives the same structure
+    // whether or not a video is attached.
+    //  • "payload" field — the full proposal JSON serialized as a string
+    //    (n8n receives it in $json.payload, identical in both cases)
+    //  • "video" field   — binary recording, present only when hasVideo is true
+    const formData = new FormData();
+    formData.append("payload", JSON.stringify(payload));
+
+    if (hasVideo) {
+      try {
+        const items = await new Promise((r) => chrome.storage.local.get("upwrite_recording", r));
+        const rec = items.upwrite_recording;
+        if (rec?.buffer) {
+          const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
+          const ext  = (rec.mimeType || "").includes("mp4") ? "mp4" : "webm";
+          formData.append("video", blob, `recording.${ext}`);
+        }
+      } catch (_) { /* blob unavailable — send without video */ }
+    }
+
+    const res = await fetch(webhookUrl, { method: "POST", body: formData });
 
     const ct   = res.headers.get("content-type") || "";
     const data = ct.includes("application/json") ? await res.json() : await res.text();
@@ -217,7 +329,7 @@ async function processProposal({ tabId, webhookUrl, payload }) {
     playChime();
 
     // Floating popup window — visible regardless of active tab or application
-    showNotificationWindow("\u2713 UpWrite: Proposal ready! Fields have been filled in.", "success");
+    showNotificationWindow("\u2713 UpWrite: Proposal ready! Fields have been filled in.", "success", tabId);
 
   } catch (err) {
     const ts = Date.now();
@@ -233,7 +345,7 @@ async function processProposal({ tabId, webhookUrl, payload }) {
     playChime();
 
     // Floating popup window — visible regardless of active tab or application
-    showNotificationWindow(`\u2717 UpWrite: Webhook failed \u2014 ${err.message}`, "error");
+    showNotificationWindow(`\u2717 UpWrite: Webhook failed \u2014 ${err.message}`, "error", tabId);
 
   } finally {
     chrome.alarms.clear(KEEPALIVE_ALARM);
@@ -246,16 +358,132 @@ async function processProposal({ tabId, webhookUrl, payload }) {
 const readyTabs = new Set();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  /* ---- Offscreen chime finished — close the document ---- */
+  /* ---- Offscreen chime finished ---- */
   if (message.type === "CHIME_DONE") {
     chrome.offscreen.closeDocument().catch(() => {});
+    return false;
+  }
+
+  /* ---- Popup: inject recorder overlay into the active Upwork tab ---- */
+  if (message.type === "OPEN_RECORDER") {
+    const tabId = message.tabId;
+    if (!tabId) { sendResponse({ ok: false, error: "No target tab." }); return true; }
+    chrome.scripting.executeScript({
+      target: { tabId },
+      files:  ["recorder-overlay.js"],
+    }).then(() => {
+      activeOverlayTabId = tabId;
+      sendResponse({ ok: true });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: String(err) });
+    });
+    return true;
+  }
+
+  /* ---- Overlay requests screen picker via desktopCapture + opens recorder.html ---- */
+  if (message.type === "REQUEST_SCREEN_CAPTURE") {
+    const senderTab = sender.tab;
+    chrome.desktopCapture.chooseDesktopMedia(
+      ["screen", "window", "tab"],
+      senderTab,
+      (streamId) => {
+        if (!streamId) {
+          // User cancelled the picker
+          if (senderTab?.id) {
+            chrome.tabs.sendMessage(senderTab.id, { type: "SCREEN_CAPTURE_CANCELLED" }).catch(() => {});
+          }
+          sendResponse({ ok: false, cancelled: true });
+          return;
+        }
+        pendingStreamId = streamId;
+        chrome.windows.create(
+          { url: chrome.runtime.getURL("recorder.html"), type: "popup", width: 220, height: 60, focused: false },
+          (win) => {
+            activeRecorderWindowId = win.id;
+            recorderTabId = win.tabs[0].id;
+            sendResponse({ ok: true });
+          }
+        );
+      }
+    );
+    return true; // async sendResponse
+  }
+
+  /* ---- recorder.html is ready — hand off the pending stream ID ---- */
+  if (message.type === "RECORDER_READY") {
+    const sid = pendingStreamId;
+    pendingStreamId = null;
+    sendResponse({ streamId: sid || null });
+    return true;
+  }
+
+  /* ---- recorder.js signals recording has started — relay to overlay ---- */
+  if (message.type === "RECORDING_STARTED") {
+    if (overlayTabId) {
+      chrome.tabs.sendMessage(overlayTabId, { type: "RECORDING_STARTED" }).catch(() => {});
+    }
+    return false;
+  }
+
+  /* ---- Timer tick from recorder.js — relay to overlay ---- */
+  if (message.type === "RECORDING_TICK") {
+    if (overlayTabId) {
+      chrome.tabs.sendMessage(overlayTabId, { type: "RECORDING_TICK", seconds: message.seconds }).catch(() => {});
+    }
+    return false;
+  }
+
+  /* ---- Overlay stop button — forward to recorder.html ---- */
+  if (message.type === "STOP_RECORDING") {
+    if (recorderTabId) {
+      chrome.tabs.sendMessage(recorderTabId, { type: "STOP_RECORDING" }).catch(() => {});
+    }
+    return false;
+  }
+
+  /* ---- recorder.js finished — persist metadata and notify overlay ---- */
+  if (message.type === "RECORDING_COMPLETE") {
+    const { ok, size, duration, mimeType: recMimeType, error } = message;
+    activeRecorderWindowId = null;
+    recorderTabId = null;
+    if (ok) {
+      chrome.storage.local.set({
+        upwrite_recording_meta: { size, duration, mimeType: recMimeType, timestamp: Date.now() },
+      });
+    } else {
+      chrome.storage.local.set({ upwrite_recording_error: error || "Recording failed." });
+    }
+    if (overlayTabId) {
+      chrome.tabs.sendMessage(overlayTabId, { type: "RECORDING_COMPLETE", ok, error }).catch(() => {});
+      overlayTabId = null;
+    }
+    return false;
+  }
+
+  /* ---- Overlay: recording is ready in chrome.storage.local ---- */
+  // The content script already wrote the buffer to chrome.storage.local
+  // (content scripts share extension storage). We just stamp the meta flag
+  // so the popup knows to show the preview.
+  if (message.type === "RECORDING_DONE") {
+    const { duration, mimeType, size } = message;
+    chrome.storage.local.set({
+      upwrite_recording_meta: { size, duration, mimeType, timestamp: Date.now() },
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  /* ---- Delete stored recording (from popup) ---- */
+  if (message.type === "DELETE_RECORDING") {
+    deleteRecordingFromIDB().catch(() => {});
+    chrome.storage.local.remove(["upwrite_recording", "upwrite_recording_meta", "upwrite_recording_error"]);
+    sendResponse({ ok: true });
     return false;
   }
 
   /* ---- Content script ready notification ---- */
   if (message.type === "CONTENT_SCRIPT_READY") {
     if (sender.tab?.id) readyTabs.add(sender.tab.id);
-    // Reply with the tabId so the content script can use it for storage lookups
     sendResponse({ tabId: sender.tab?.id ?? null });
     return true;
   }
@@ -301,7 +529,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: err.message });
       });
 
-    return true; // keep message channel open for async response
+    return true;
   }
 
   /* ---- Save settings ---- */
@@ -316,14 +544,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "LOAD_SETTINGS") {
     chrome.storage.sync.get(null, (items) => {
       sendResponse({ success: true, settings: items });
-    });
-    return true;
-  }
-
-  /* ---- Recording complete (from recorder.html tab) ---- */
-  if (message.type === "RECORDING_COMPLETE") {
-    chrome.storage.local.set({ recordingDone: true }, () => {
-      sendResponse({ success: true });
     });
     return true;
   }

@@ -1,4 +1,14 @@
 <!DOCTYPE html>
-<html><head><meta charset="UTF-8"></head>
-<body><script src="offscreen.js"></script></body>
+<html>
+  <head><meta charset="UTF-8"></head>
+  <body>
+    <!-- Hidden elements used by the recording engine -->
+    <video id="vid-screen" autoplay muted playsinline
+      style="position:absolute;top:-9999px;left:-9999px;width:1px;height:1px"></video>
+    <video id="vid-cam" autoplay muted playsinline
+      style="position:absolute;top:-9999px;left:-9999px;width:1px;height:1px"></video>
+    <canvas id="mix-canvas"
+      style="position:absolute;top:-9999px;left:-9999px;width:1px;height:1px"></canvas>
+    <script src="offscreen.js"></script>
+  </body>
 </html>

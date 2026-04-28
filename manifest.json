@@ -33,12 +33,18 @@
       "run_at": "document_idle"
     }
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; media-src blob: 'self';"
+  },
   "permissions": [
     "activeTab",
     "storage",
+    "unlimitedStorage",
     "scripting",
     "alarms",
     "offscreen",
+    "desktopCapture",
+    "tabs",
     "notifications"
   ],
   "host_permissions": [

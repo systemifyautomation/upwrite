@@ -1,13 +1,27 @@
-"use strict";
+﻿"use strict";
 
 /**
- * UpWrite – Offscreen audio document
+ * UpWrite – Offscreen Document
  *
- * Created by the service worker via chrome.offscreen.createDocument() with
- * reason AUDIO_PLAYBACK. Plays a two-note ascending chime the moment it
- * loads, then signals the SW so it can close this document.
+ * Sole responsibility: play the two-note notification chime and signal
+ * CHIME_DONE so the background SW can close this document.
+ *
+ * Screen recording now runs entirely in recorder.js (the recorder popup
+ * window) where the desktopCapture streamId is valid. This document no
+ * longer handles any media capture.
  */
-(function () {
+
+chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+  if (message.target !== "offscreen") return false;
+
+  if (message.type === "PLAY_CHIME") {
+    playChime();
+  }
+
+  return false;
+});
+
+function playChime() {
   try {
     const ctx = new AudioContext();
 
@@ -25,17 +39,14 @@
     }
 
     const t = ctx.currentTime;
-    tone(880,  t,        0.18, 0.40); // A5 – first note
-    tone(1318, t + 0.18, 0.40, 0.35); // E6 – second note (ascending chime)
+    tone(880,  t,        0.18, 0.40);
+    tone(1318, t + 0.18, 0.40, 0.35);
 
-    // Notify the SW once the chime is done so it can close this document
-    const totalDuration = (0.18 + 0.40) * 1000 + 100; // ms
+    const totalDuration = (0.18 + 0.40) * 1000 + 100;
     setTimeout(() => {
       chrome.runtime.sendMessage({ type: "CHIME_DONE" }).catch(() => {});
     }, totalDuration);
-
   } catch (_) {
-    // AudioContext unavailable — signal done immediately so document is closed
     chrome.runtime.sendMessage({ type: "CHIME_DONE" }).catch(() => {});
   }
-})();
+}
