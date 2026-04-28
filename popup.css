@@ -17,7 +17,6 @@
   --color-text: #1a1a1a;
   --color-text-muted: #6b6b6b;
   --color-bg: #ffffff;
-  --color-loom: #625df5;
   --color-warning-bg: #fffbe6;
   --color-warning-border: #ffe58f;
   --color-warning-text: #7a6100;
@@ -191,8 +190,40 @@ body {
   background: rgba(233, 69, 96, .1);
   color: #e94560;
   border: 1px solid rgba(233, 69, 96, .3);
+  cursor: pointer;
 }
 .btn--record:hover:not(:disabled) { background: rgba(233, 69, 96, .18); }
+
+.btn--upload {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--color-secondary);
+  color: var(--color-text-muted);
+  border: 1px dashed var(--color-border);
+  cursor: pointer;
+}
+.btn--upload:hover { background: #ebebeb; color: var(--color-text); border-color: #bbb; }
+
+.or-divider {
+  text-align: center;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin: 7px 0;
+  position: relative;
+}
+.or-divider::before,
+.or-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: calc(50% - 18px);
+  height: 1px;
+  background: var(--color-border);
+}
+.or-divider::before { left: 0; }
+.or-divider::after  { right: 0; }
 
 .btn--full { width: 100%; }
 
@@ -348,14 +379,7 @@ body {
   font-family: var(--font);
 }
 
-/* ---------- Extract placeholder ---------- */
-.extract-placeholder { text-align: center; }
-
 /* ---------- Recording ---------- */
-.video-paste-row {
-  margin-top: 7px;
-}
-
 .record-done-hint {
   font-size: 11px;
   color: var(--color-success-text);
@@ -364,10 +388,7 @@ body {
   border-radius: var(--radius-sm);
   padding: 5px 9px;
   margin-top: 7px;
-  margin-bottom: 2px;
 }
-
-.video-recorded { }
 
 .video-preview-player {
   width: 100%;
@@ -378,39 +399,17 @@ body {
   margin-bottom: 6px;
 }
 
+.video-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .video-meta {
   font-size: 11px;
   color: var(--color-text-muted);
-  margin-bottom: 6px;
 }
-
-.video-preview-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.video-preview {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: rgba(233, 69, 96, .07);
-  border: 1px solid rgba(233, 69, 96, .25);
-  border-radius: var(--radius);
-}
-
-.video-url-link {
-  flex: 1;
-  font-size: 12px;
-  color: #e94560;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-decoration: none;
-}
-.video-url-link:hover { text-decoration: underline; }
 
 /* ---------- Response fields ---------- */
 .response-field {

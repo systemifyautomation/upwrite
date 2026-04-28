@@ -137,6 +137,10 @@
     <!-- Error display (shown in idle state on failure) -->
     <div id="r-error" class="r-error r-state--hidden"></div>
 
+    <!-- Hidden compositing elements — not visible to the user -->
+    <video id="vid-screen" autoplay muted playsinline style="display:none;"></video>
+    <canvas id="mix-canvas" style="display:none;"></canvas>
+
     <script src="recorder.js"></script>
   </body>
 </html>

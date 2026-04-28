@@ -153,8 +153,9 @@ chrome.notifications.onClicked.addListener((notifId) => {
 /* ------------------------------------------------------------------ */
 /*  Recording state                                                      */
 /* ------------------------------------------------------------------ */
-// Tab where the recorder overlay is currently injected.
-let activeOverlayTabId = null;
+let overlayTabId           = null;  // tab with the active recording overlay
+let activeRecorderWindowId = null;  // windowId of the open recorder.html popup
+let recorderTabId          = null;  // tabId of the recorder.html page
 
 
 
@@ -178,14 +179,14 @@ async function getRecordingFromIDB() {
     req.onsuccess = (e) => {
       const rec = e.target.result;
       if (!rec) return resolve(null);
-      // Duck-type check instead of instanceof to handle cross-realm ArrayBuffers.
+      // Support both new format (buffer: ArrayBuffer) and old format (blob: Blob)
       let blob;
-      if (rec.buffer && rec.buffer.byteLength > 0) {
+      if (rec.buffer instanceof ArrayBuffer) {
         blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
-      } else if (rec.blob && rec.blob.size > 0) {
+      } else if (rec.blob instanceof Blob) {
         blob = rec.blob;
       } else {
-        return resolve(null); // unreadable or empty record
+        return resolve(null); // unreadable record
       }
       resolve({ ...rec, blob });
     };
@@ -202,8 +203,67 @@ async function deleteRecordingFromIDB() {
   });
 }
 
-// recorder-overlay.js handles recording entirely in the content-script
-// context — no IDB access needed here for chunk streaming.
+async function saveRecordingToIDB(buffer, duration, mimeType) {
+  const db = await openSwDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("recordings", "readwrite");
+    tx.objectStore("recordings").put(
+      { buffer, duration, mimeType, timestamp: Date.now(), size: buffer.byteLength },
+      "current"
+    );
+    tx.oncomplete = () => resolve();
+    tx.onerror    = (e) => reject(e.target.error);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Camera-only recording: chunk port handler                           */
+/*  Overlay streams ArrayBuffer chunks via a long-lived port; we        */
+/*  reassemble them here and save to the extension's IDB.               */
+/* ------------------------------------------------------------------ */
+let _camChunks       = [];
+let _camOverlayTabId = null;
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "recording-stream") return;
+  _camChunks       = [];
+  _camOverlayTabId = overlayTabId;  // capture at connect time
+
+  port.onMessage.addListener(async (msg) => {
+    if (msg.type === "CHUNK" && msg.chunk instanceof ArrayBuffer) {
+      _camChunks.push(msg.chunk);
+    }
+    if (msg.type === "RECORDING_DONE") {
+      const mimeType = msg.mimeType || "video/webm";
+      const duration = msg.duration || 0;
+      const chunks   = _camChunks;
+      _camChunks     = [];
+
+      const totalSize = chunks.reduce((s, b) => s + b.byteLength, 0);
+      const combined  = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const buf of chunks) { combined.set(new Uint8Array(buf), offset); offset += buf.byteLength; }
+
+      try {
+        await saveRecordingToIDB(combined.buffer, duration, mimeType);
+        chrome.storage.local.set({
+          upwrite_recording_meta: { size: combined.byteLength, duration, mimeType, timestamp: Date.now() },
+        });
+        if (_camOverlayTabId) {
+          chrome.tabs.sendMessage(_camOverlayTabId, { type: "RECORDING_COMPLETE", ok: true, duration }).catch(() => {});
+        }
+      } catch (err) {
+        if (_camOverlayTabId) {
+          chrome.tabs.sendMessage(_camOverlayTabId, { type: "RECORDING_COMPLETE", ok: false, error: String(err) }).catch(() => {});
+        }
+      }
+      overlayTabId     = null;
+      _camOverlayTabId = null;
+    }
+  });
+
+  port.onDisconnect.addListener(() => { _camChunks = []; });
+});
 
 /* ------------------------------------------------------------------ */
 /*  Offscreen document management                                        */
@@ -235,8 +295,8 @@ async function ensureOffscreenDoc(reasons, justification) {
 /*  Chime player                                                         */
 /* ------------------------------------------------------------------ */
 async function playChime() {
-  // Re-use the offscreen doc if it already exists (e.g. during recording).
-  // Otherwise create one just for audio playback.
+  // Recording now runs in recorder.js, not the offscreen doc.
+  // Create the offscreen doc only for audio chime playback.
   await ensureOffscreenDoc(["AUDIO_PLAYBACK"], "Play proposal-ready notification chime.");
   chrome.runtime.sendMessage({ target: "offscreen", type: "PLAY_CHIME" }).catch(() => {});
 }
@@ -283,14 +343,12 @@ async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
 
     if (hasVideo) {
       try {
-        const items = await new Promise((r) => chrome.storage.local.get("upwrite_recording", r));
-        const rec = items.upwrite_recording;
-        if (rec?.buffer) {
-          const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
-          const ext  = (rec.mimeType || "").includes("mp4") ? "mp4" : "webm";
-          formData.append("video", blob, `recording.${ext}`);
+        const rec = await getRecordingFromIDB();
+        if (rec?.blob) {
+          const ext = rec.blob.type.includes("mp4") ? "mp4" : "webm";
+          formData.append("video", rec.blob, `recording.${ext}`);
         }
-      } catch (_) { /* blob unavailable — send without video */ }
+      } catch (_) { /* blob unavailable — send without video field */ }
     }
 
     const res = await fetch(webhookUrl, { method: "POST", body: formData });
@@ -358,63 +416,45 @@ async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
 const readyTabs = new Set();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  /* ---- Offscreen chime finished ---- */
+  /* ---- Offscreen chime finished — close doc only if not recording ---- */
   if (message.type === "CHIME_DONE") {
-    chrome.offscreen.closeDocument().catch(() => {});
+    // Don't close the offscreen doc while it's still needed for recording
+    if (!activeRecorderWindowId) {
+      chrome.offscreen.closeDocument().catch(() => {});
+    }
     return false;
   }
 
-  /* ---- Popup: inject recorder overlay into the active Upwork tab ---- */
-  if (message.type === "OPEN_RECORDER") {
+  /* ---- Popup: inject pre-recording overlay into the active tab ---- */
+  if (message.type === "INJECT_RECORDER_OVERLAY") {
     const tabId = message.tabId;
-    if (!tabId) { sendResponse({ ok: false, error: "No target tab." }); return true; }
+    if (!tabId) { sendResponse({ ok: false, error: "No tabId provided." }); return true; }
+    overlayTabId = tabId;
     chrome.scripting.executeScript({
       target: { tabId },
       files:  ["recorder-overlay.js"],
-    }).then(() => {
-      activeOverlayTabId = tabId;
-      sendResponse({ ok: true });
-    }).catch((err) => {
-      sendResponse({ ok: false, error: String(err) });
-    });
+    }).then(() => sendResponse({ ok: true }))
+      .catch((err) => {
+        overlayTabId = null;
+        sendResponse({ ok: false, error: String(err) });
+      });
     return true;
   }
 
-  /* ---- Overlay requests screen picker via desktopCapture + opens recorder.html ---- */
+  /* ---- Overlay requests screen recording — open recorder.html directly ---- */
   if (message.type === "REQUEST_SCREEN_CAPTURE") {
-    const senderTab = sender.tab;
-    chrome.desktopCapture.chooseDesktopMedia(
-      ["screen", "window", "tab"],
-      senderTab,
-      (streamId) => {
-        if (!streamId) {
-          // User cancelled the picker
-          if (senderTab?.id) {
-            chrome.tabs.sendMessage(senderTab.id, { type: "SCREEN_CAPTURE_CANCELLED" }).catch(() => {});
-          }
-          sendResponse({ ok: false, cancelled: true });
-          return;
-        }
-        pendingStreamId = streamId;
-        chrome.windows.create(
-          { url: chrome.runtime.getURL("recorder.html"), type: "popup", width: 220, height: 60, focused: false },
-          (win) => {
-            activeRecorderWindowId = win.id;
-            recorderTabId = win.tabs[0].id;
-            sendResponse({ ok: true });
-          }
-        );
+    // recorder.html calls getDisplayMedia() itself — extension pages can do this
+    // without a user gesture and without the chooseDesktopMedia/streamId flow,
+    // which is incompatible with service-worker context.
+    chrome.windows.create(
+      { url: chrome.runtime.getURL("recorder.html"), type: "popup", width: 520, height: 480, focused: true },
+      (win) => {
+        activeRecorderWindowId = win.id;
+        recorderTabId = win.tabs[0].id;
+        sendResponse({ ok: true });
       }
     );
     return true; // async sendResponse
-  }
-
-  /* ---- recorder.html is ready — hand off the pending stream ID ---- */
-  if (message.type === "RECORDER_READY") {
-    const sid = pendingStreamId;
-    pendingStreamId = null;
-    sendResponse({ streamId: sid || null });
-    return true;
   }
 
   /* ---- recorder.js signals recording has started — relay to overlay ---- */
@@ -460,23 +500,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  /* ---- Overlay: recording is ready in chrome.storage.local ---- */
-  // The content script already wrote the buffer to chrome.storage.local
-  // (content scripts share extension storage). We just stamp the meta flag
-  // so the popup knows to show the preview.
-  if (message.type === "RECORDING_DONE") {
-    const { duration, mimeType, size } = message;
-    chrome.storage.local.set({
-      upwrite_recording_meta: { size, duration, mimeType, timestamp: Date.now() },
-    });
-    sendResponse({ ok: true });
-    return true;
+  /* ---- Save recording to Downloads folder ---- */
+  if (message.type === "DOWNLOAD_RECORDING") {
+    getRecordingFromIDB()
+      .then((rec) => {
+        if (!rec?.blob) { sendResponse({ ok: false, error: "No recording found." }); return; }
+        const ext     = (rec.mimeType || "video/webm").includes("mp4") ? "mp4" : "webm";
+        const blobUrl = URL.createObjectURL(rec.blob);
+        chrome.downloads.download(
+          { url: blobUrl, filename: `upwrite-recording-${Date.now()}.${ext}`, saveAs: false },
+          (downloadId) => {
+            // Revoke blob URL once the download manager has queued the item
+            URL.revokeObjectURL(blobUrl);
+            if (chrome.runtime.lastError || downloadId === undefined) {
+              sendResponse({ ok: false, error: chrome.runtime.lastError?.message || "Download failed." });
+            } else {
+              sendResponse({ ok: true, downloadId });
+            }
+          }
+        );
+      })
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true; // async sendResponse
   }
 
   /* ---- Delete stored recording (from popup) ---- */
   if (message.type === "DELETE_RECORDING") {
     deleteRecordingFromIDB().catch(() => {});
-    chrome.storage.local.remove(["upwrite_recording", "upwrite_recording_meta", "upwrite_recording_error"]);
+    chrome.storage.local.remove(["upwrite_recording_meta", "upwrite_recording_error"]);
     sendResponse({ ok: true });
     return false;
   }
@@ -529,6 +580,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: err.message });
       });
 
+    return true;
+  }
+
+  /* ---- Popup: load recording buffer from IDB ---- */
+  if (message.type === "GET_RECORDING") {
+    getRecordingFromIDB()
+      .then((rec) => {
+        if (!rec?.buffer) {
+          sendResponse({ buffer: null });
+        } else {
+          sendResponse({
+            buffer:   rec.buffer,
+            duration: rec.duration,
+            size:     rec.size,
+            mimeType: rec.mimeType,
+          });
+        }
+      })
+      .catch(() => sendResponse({ buffer: null }));
     return true;
   }
 

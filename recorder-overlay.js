@@ -6,13 +6,13 @@
   /* ── State ─────────────────────────────────────────────────────────── */
   let recordingMode    = null;   // "screen" | "camera"
   let cameraStream     = null;   // live camera preview (video only)
-  let recStream        = null;   // stream fed to MediaRecorder
-  let screenDispStream = null;   // getDisplayMedia stream (screen mode)
-  let camRecStream     = null;   // camera video for bubble preview (screen mode)
-  let micStream        = null;   // mic audio (screen mode)
-  let audioCtxRef      = null;   // AudioContext for mixing (screen mode)
+  let recStream        = null;   // stream fed to MediaRecorder (camera-only)
+  let screenDispStream = null;   // unused in screen mode (kept for cleanup safety)
+  let camRecStream     = null;   // unused in screen mode (kept for cleanup safety)
+  let micStream        = null;   // unused in screen mode (kept for cleanup safety)
+  let audioCtxRef      = null;   // unused in screen mode (kept for cleanup safety)
   let mediaRecorder    = null;
-  let port             = null;   // background port for chunk streaming
+  let port             = null;   // background port for chunk streaming (camera-only)
   let overlayTimer     = null;
   let overlaySeconds   = 0;
 
@@ -166,7 +166,7 @@
     document.getElementById("uw-phase-rec").style.display  = "block";
   }
 
-  // Only used by camera-only mode (screen mode timer driven by RECORDING_TICK)
+  // Only used by camera-only mode (screen mode timer driven by RECORDING_TICK from recorder.js)
   function startLocalTimer() {
     overlaySeconds = 0;
     overlayTimer = setInterval(() => {
@@ -180,7 +180,7 @@
   document.getElementById("uw-btn-screen").addEventListener("click", () => {
     recordingMode = "screen";
     document.getElementById("uw-btn-screen").disabled = true;
-    document.getElementById("uw-btn-screen").textContent = "Choose screen\u2026";
+    document.getElementById("uw-btn-screen").textContent = "Choose screen…";
     document.getElementById("uw-btn-cam").disabled = true;
     startScreenRecording();
   });
@@ -195,8 +195,13 @@
   document.getElementById("uw-btn-stop").addEventListener("click", () => {
     if (overlayTimer) { clearInterval(overlayTimer); overlayTimer = null; }
     const btn = document.getElementById("uw-btn-stop");
-    if (btn) { btn.disabled = true; btn.textContent = "Saving\u2026"; }
-    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    if (recordingMode === "screen") {
+      // Tell background to stop the recorder.html recording
+      chrome.runtime.sendMessage({ type: "STOP_RECORDING" }).catch(() => {});
+    } else if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
   });
 
   /* ── Camera-only recording ──────────────────────────────────────────── */
@@ -251,170 +256,33 @@
     }
   }
 
-  /* ── Messages from background (camera-only RECORDING_COMPLETE from port handler) ── */
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "RECORDING_COMPLETE" || msg.type === "REMOVE_OVERLAY" || msg.type === "RECORDING_ERROR") {
-      cleanup();
-    }
-  });
-
   /* ── Screen recording ───────────────────────────────────────────────── */
   async function startScreenRecording() {
+    if (cameraStream) { cameraStream.getTracks().forEach((t) => t.stop()); cameraStream = null; }
+
     try {
-      if (cameraStream) { cameraStream.getTracks().forEach((t) => t.stop()); cameraStream = null; }
-
-      // getDisplayMedia shows Chrome's native screen picker in the current tab.
-      screenDispStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30 } },
-        audio: true,
+      // Delegate to the background SW which calls chrome.desktopCapture.chooseDesktopMedia()
+      // and opens recorder.html (an extension page). This avoids calling getDisplayMedia()
+      // from a content script, which is blocked by Upwork's Permissions-Policy header.
+      const response = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "REQUEST_SCREEN_CAPTURE" }, (res) => {
+          resolve(chrome.runtime.lastError ? null : res);
+        });
       });
 
-      // Camera — composited as a PiP bubble and also shown in the overlay preview
-      try {
-        camRecStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 360 }, height: { ideal: 360 }, facingMode: "user" },
-          audio: false,
-        });
-        const previewEl = document.getElementById("uw-cam-video");
-        if (previewEl) {
-          previewEl.srcObject = camRecStream;
-          previewEl.play().catch(() => {});
+      if (!response?.ok) {
+        // User cancelled the picker or an error occurred — reset buttons
+        const s = document.getElementById("uw-btn-screen");
+        const c = document.getElementById("uw-btn-cam");
+        if (s) {
+          s.disabled = false;
+          s.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> Share Screen';
         }
-      } catch (_) { camRecStream = null; }
-
-      // Mic (optional — mixed with screen audio)
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true }, video: false,
-        });
-      } catch (_) { micStream = null; }
-
-      // ── Canvas compositing: screen + camera PiP ──────────────────────
-      const vt = screenDispStream.getVideoTracks()[0];
-      const { width = 1280, height = 720 } = vt.getSettings();
-
-      const compCanvas = document.createElement("canvas");
-      compCanvas.width  = width;
-      compCanvas.height = height;
-      compCanvas.style.cssText = "all:initial;position:fixed;top:-9999px;left:-9999px;pointer-events:none;";
-      document.body.appendChild(compCanvas);
-      const compCtx = compCanvas.getContext("2d");
-
-      const vidScreenComp = document.createElement("video");
-      vidScreenComp.autoplay = true; vidScreenComp.muted = true; vidScreenComp.playsInline = true;
-      vidScreenComp.style.cssText = "all:initial;position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;pointer-events:none;";
-      document.body.appendChild(vidScreenComp);
-      vidScreenComp.srcObject = screenDispStream;
-      await new Promise((res) => {
-        if (vidScreenComp.readyState >= 1) { res(); return; }
-        vidScreenComp.onloadedmetadata = res;
-      });
-      vidScreenComp.play().catch(() => {});
-
-      let vidCamComp = null;
-      if (camRecStream) {
-        vidCamComp = document.createElement("video");
-        vidCamComp.autoplay = true; vidCamComp.muted = true; vidCamComp.playsInline = true;
-        vidCamComp.style.cssText = "all:initial;position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;pointer-events:none;";
-        document.body.appendChild(vidCamComp);
-        vidCamComp.srcObject = camRecStream;
-        await new Promise((res) => {
-          if (vidCamComp.readyState >= 1) { res(); return; }
-          vidCamComp.onloadedmetadata = res;
-        });
-        vidCamComp.play().catch(() => {});
+        if (c) c.disabled = false;
       }
-
-      const CAM_RATIO = 0.22, CAM_PAD = 28;
-      let compDrawRaf = null;
-      let compDrawActive = true;
-      function drawCompFrame() {
-        if (!compDrawActive) return;
-        if (vidScreenComp.readyState >= 2) {
-          compCtx.drawImage(vidScreenComp, 0, 0, width, height);
-        }
-        if (vidCamComp && vidCamComp.readyState >= 2) {
-          const short = Math.min(width, height);
-          const size  = Math.round(short * CAM_RATIO);
-          const x = width - size - CAM_PAD, y = height - size - CAM_PAD;
-          const cx = x + size / 2, cy = y + size / 2, r = size / 2;
-          compCtx.save();
-          compCtx.beginPath();
-          compCtx.arc(cx, cy, r, 0, Math.PI * 2);
-          compCtx.clip();
-          compCtx.translate(x + size, y);
-          compCtx.scale(-1, 1);
-          compCtx.drawImage(vidCamComp, 0, 0, size, size);
-          compCtx.restore();
-          compCtx.beginPath();
-          compCtx.arc(cx, cy, r + 3, 0, Math.PI * 2);
-          compCtx.strokeStyle = "rgba(255,255,255,0.88)";
-          compCtx.lineWidth   = 5;
-          compCtx.stroke();
-        }
-        compDrawRaf = requestAnimationFrame(drawCompFrame);
-      }
-      compDrawRaf = requestAnimationFrame(drawCompFrame);
-
-      // Handle user clicking "Stop sharing" in Chrome's toolbar
-      vt.addEventListener("ended", () => {
-        if (overlayTimer) { clearInterval(overlayTimer); overlayTimer = null; }
-        const btn = document.getElementById("uw-btn-stop");
-        if (btn) { btn.disabled = true; btn.textContent = "Saving\u2026"; }
-        if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-      });
-
-      // Build the record stream: composited canvas video + combined audio
-      const audioTracks = buildAudioMix(screenDispStream, micStream);
-      const canvasStream = compCanvas.captureStream(0); // 0 = manual frame timing via rAF
-
-      // Wait for the first real frame to be drawn so the recording is not blank
-      await new Promise((res) => {
-        if (vidScreenComp.readyState >= 3) { res(); return; }
-        vidScreenComp.addEventListener("canplay", res, { once: true });
-      });
-
-      recStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
-
-      port = chrome.runtime.connect({ name: "recording-stream" });
-      port.onDisconnect.addListener(() => { port = null; });
-
-      const mimeType =
-        ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
-          .find((t) => MediaRecorder.isTypeSupported(t)) || "";
-      const pending = [];
-      mediaRecorder = new MediaRecorder(recStream, mimeType ? { mimeType } : {});
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (!e.data || e.data.size === 0) return;
-        const p = e.data.arrayBuffer().then((buf) => { if (port) port.postMessage({ type: "CHUNK", chunk: buf }); });
-        pending.push(p);
-      };
-
-      mediaRecorder.onstop = async () => {
-        compDrawActive = false;
-        if (compDrawRaf !== null) { cancelAnimationFrame(compDrawRaf); compDrawRaf = null; }
-        vidScreenComp.srcObject = null; vidScreenComp.remove();
-        if (vidCamComp) { vidCamComp.srcObject = null; vidCamComp.remove(); }
-        compCanvas.remove();
-        screenDispStream?.getTracks().forEach((t) => t.stop()); screenDispStream = null;
-        camRecStream?.getTracks().forEach((t) => t.stop()); camRecStream = null;
-        micStream?.getTracks().forEach((t) => t.stop()); micStream = null;
-        audioCtxRef?.close().catch(() => {}); audioCtxRef = null;
-        await Promise.allSettled(pending); pending.length = 0;
-        const actualMime = mediaRecorder.mimeType || mimeType || "video/webm";
-        if (port) {
-          port.postMessage({ type: "RECORDING_DONE", duration: overlaySeconds, mimeType: actualMime });
-          port.disconnect();
-        }
-        port = null;
-      };
-
-      mediaRecorder.start(1000);
-      enterRecordingPhase();
-      startLocalTimer();
+      // ok: true → recorder.html is loading; overlay waits for RECORDING_STARTED
+      // then RECORDING_TICK messages from recorder.js to drive the timer.
     } catch (_err) {
-      // User cancelled the picker or permission denied — reset buttons
       const s = document.getElementById("uw-btn-screen");
       const c = document.getElementById("uw-btn-cam");
       if (s) {
@@ -422,25 +290,36 @@
         s.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> Share Screen';
       }
       if (c) c.disabled = false;
-      screenDispStream?.getTracks().forEach((t) => t.stop()); screenDispStream = null;
-      camRecStream?.getTracks().forEach((t) => t.stop()); camRecStream = null;
-      micStream?.getTracks().forEach((t) => t.stop()); micStream = null;
     }
   }
 
-  function buildAudioMix(dispStream, mic) {
-    const screenAudio = dispStream.getAudioTracks();
-    const micAudio    = mic ? mic.getAudioTracks() : [];
-    if (!screenAudio.length && !micAudio.length) return [];
-    if (screenAudio.length && micAudio.length) {
-      audioCtxRef = new AudioContext();
-      const dest = audioCtxRef.createMediaStreamDestination();
-      audioCtxRef.createMediaStreamSource(new MediaStream(screenAudio)).connect(dest);
-      audioCtxRef.createMediaStreamSource(new MediaStream(micAudio)).connect(dest);
-      return dest.stream.getAudioTracks();
+  /* ── Messages from background ───────────────────────────────────────── */
+  chrome.runtime.onMessage.addListener((msg) => {
+    // screen mode: recorder.js started — show the recording UI
+    if (msg.type === "RECORDING_STARTED") {
+      enterRecordingPhase();
+      overlaySeconds = 0;
     }
-    return screenAudio.length ? screenAudio : micAudio;
-  }
+    // screen mode: timer tick relayed from recorder.js
+    if (msg.type === "RECORDING_TICK") {
+      overlaySeconds = msg.seconds;
+      const el = document.getElementById("uw-timer");
+      if (el) el.textContent = fmt(msg.seconds);
+    }
+    // screen mode: user cancelled the picker before confirming
+    if (msg.type === "SCREEN_CAPTURE_CANCELLED") {
+      const s = document.getElementById("uw-btn-screen");
+      const c = document.getElementById("uw-btn-cam");
+      if (s) {
+        s.disabled = false;
+        s.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> Share Screen';
+      }
+      if (c) c.disabled = false;
+    }
+    if (msg.type === "RECORDING_COMPLETE" || msg.type === "REMOVE_OVERLAY" || msg.type === "RECORDING_ERROR") {
+      cleanup();
+    }
+  });
 
   /* ── Cleanup ────────────────────────────────────────────────────────── */
   function cleanup() {

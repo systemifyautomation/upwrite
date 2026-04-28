@@ -14,9 +14,18 @@
 /*  DOM helpers                                                         */
 /* ================================================================== */
 const $ = (id) => document.getElementById(id);
+const pick = (...ids) => ids.map((id) => $(id)).find(Boolean) || null;
 const show = (el) => el && el.classList.remove("hidden");
 const hide = (el) => el && el.classList.add("hidden");
 const isHidden = (el) => el && el.classList.contains("hidden");
+
+function bindEvent(ids, eventName, handler) {
+  const idList = Array.isArray(ids) ? ids : [ids];
+  const el = pick(...idList);
+  if (!el) return false;
+  el.addEventListener(eventName, handler);
+  return true;
+}
 
 /* ================================================================== */
 /*  State                                                               */
@@ -39,13 +48,14 @@ let state = {
 function showStatus(message, type = "info") {
   const bar = $("status-bar");
   const text = $("status-text");
+  if (!bar || !text) return;
   text.textContent = message;
   bar.className = `status-bar status-bar--${type}`;
   show(bar);
 }
 
 function clearStatus() {
-  hide($("status-bar"));
+  hide(pick("status-bar"));
 }
 
 /* ================================================================== */
@@ -156,23 +166,49 @@ function doExtract() {
 /*  Screen recording                                                    */
 /* ================================================================== */
 
-/** Load the recording buffer from chrome.storage.local.
- *  Content scripts write it there; popup and background SW read from it.
- *  This avoids all cross-realm ArrayBuffer issues that arise when going
- *  through IDB across different execution contexts.
+/** Save an uploaded File/Blob to the same IDB slot that recorder.js uses,
+ *  so background.js can attach it to the webhook FormData via hasVideo.
  */
+async function saveUploadToIDB(blob, filename) {
+  const buffer = await blob.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("upwrite-db", 1);
+    req.onupgradeneeded = (e) => e.target.result.createObjectStore("recordings");
+    req.onerror = () => reject(new Error("IDB open failed"));
+    req.onsuccess = (e) => {
+      const db = e.target.result;
+      const tx = db.transaction("recordings", "readwrite");
+      tx.objectStore("recordings").put(
+        { buffer, mimeType: blob.type || "video/webm", duration: 0,
+          size: buffer.byteLength, timestamp: Date.now(), filename },
+        "current"
+      );
+      tx.oncomplete = () => resolve();
+      tx.onerror    = (ev) => reject(ev.target.error);
+    };
+  });
+}
+
+/** Load the recording directly from IndexedDB — popup shares the extension origin. */
 async function loadRecordingFromStorage() {
   return new Promise((resolve) => {
-    chrome.storage.local.get("upwrite_recording", (items) => {
-      const rec = items.upwrite_recording;
-      if (!rec || !rec.buffer) return resolve(null);
-      try {
-        const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
-        resolve({ ...rec, blob });
-      } catch (_) {
-        resolve(null);
-      }
-    });
+    const req = indexedDB.open("upwrite-db", 1);
+    req.onupgradeneeded = (e) => e.target.result.createObjectStore("recordings");
+    req.onerror = () => resolve(null);
+    req.onsuccess = (e) => {
+      const db = e.target.result;
+      const tx = db.transaction("recordings", "readonly");
+      const get = tx.objectStore("recordings").get("current");
+      get.onsuccess = (ev) => {
+        const rec = ev.target.result;
+        if (!rec) return resolve(null);
+        try {
+          const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
+          resolve({ ...rec, blob });
+        } catch (_) { resolve(null); }
+      };
+      get.onerror = () => resolve(null);
+    };
   });
 }
 
@@ -203,13 +239,13 @@ function showRecordedVideo(blob, duration, size) {
   state.videoBlobUrl = URL.createObjectURL(blob);
   state.hasVideo     = true;
 
-  const preview = $("video-preview");
+  const preview = pick("video-preview");
   if (preview) {
     preview.src = state.videoBlobUrl;
     preview.load();
   }
 
-  const meta = $("video-meta");
+  const meta = pick("video-meta");
   if (meta) {
     const parts = [];
     if (duration) parts.push(`Duration: ${formatDuration(duration)}`);
@@ -217,16 +253,25 @@ function showRecordedVideo(blob, duration, size) {
     meta.textContent = parts.join("  ·  ");
   }
 
-  hide($("video-url-display"));
-  show($("video-recorded"));
-  hide($("video-not-recorded"));
+  const display = pick("video-url-display", "loom-url-display");
+  if (display) {
+    const parts = ["Recorded video"];
+    if (duration) parts.push(formatDuration(duration));
+    if (size) parts.push(formatBytes(size));
+    display.textContent = parts.join(" · ");
+    display.href = state.videoBlobUrl;
+    display.classList.remove("hidden");
+  }
+
+  show(pick("video-recorded", "loom-recorded"));
+  hide(pick("video-not-recorded", "loom-not-recorded"));
   updateSendButton();
 }
 
 function openRecorder() {
   if (!state.activeTabId) return;
-  // Open recorder.html as a floating popup window (no tab strip) via background SW
-  chrome.runtime.sendMessage({ type: "OPEN_RECORDER", tabId: state.activeTabId });
+  // Inject the pre-recording overlay into the active tab
+  chrome.runtime.sendMessage({ type: "INJECT_RECORDER_OVERLAY", tabId: state.activeTabId });
   // Close the popup so the user can interact with the screen picker
   window.close();
 }
@@ -241,20 +286,20 @@ function setVideoUrl(url) {
     state.videoBlobUrl = null;
   }
 
-  const display = $("video-url-display");
+  const display = pick("video-url-display", "loom-url-display");
   if (display) {
     display.textContent = truncateUrl(state.videoUrl, 38);
     display.href = state.videoUrl;
     display.classList.remove("hidden");
   }
 
-  const preview = $("video-preview");
+  const preview = pick("video-preview");
   if (preview) {
     preview.src = state.videoUrl;
   }
 
-  show($("video-recorded"));
-  hide($("video-not-recorded"));
+  show(pick("video-recorded", "loom-recorded"));
+  hide(pick("video-not-recorded", "loom-not-recorded"));
   updateSendButton();
 }
 
@@ -266,18 +311,24 @@ function removeVideo() {
   state.videoUrl  = "";
   state.videoBlob = null;
   state.hasVideo  = false;
-  $("input-video-url").value = "";
+  const videoInput = pick("input-video-url", "input-loom-url");
+  if (videoInput) videoInput.value = "";
 
-  const preview = $("video-preview");
+  const preview = pick("video-preview");
   if (preview) { preview.src = ""; preview.load(); }
 
-  hide($("video-recorded"));
-  show($("video-not-recorded"));
+  const display = pick("video-url-display", "loom-url-display");
+  if (display) {
+    display.textContent = "";
+    display.removeAttribute("href");
+  }
+
+  hide(pick("video-recorded", "loom-recorded"));
+  show(pick("video-not-recorded", "loom-not-recorded"));
   updateSendButton();
 
   // Remove from extension storage and background state
   chrome.runtime.sendMessage({ type: "DELETE_RECORDING" });
-  chrome.storage.local.remove("upwrite_recording");
 }
 
 function truncateUrl(url, maxLen) {
@@ -319,7 +370,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 /*  Send to webhook                                                     */
 /* ================================================================== */
 function updateSendButton() {
-  const btn = $("btn-send");
+  const btn = pick("btn-send");
+  if (!btn) return;
   btn.disabled = !state.webhookUrl;
 }
 
@@ -356,8 +408,8 @@ async function sendToWebhook() {
 
   const btn = $("btn-send");
   btn.disabled = true;
-  btn.textContent = "Extracting…";
-  showStatus("Extracting proposal data…", "info");
+  btn.textContent = "Working\u2026";
+  showStatus("Sending to AI \u2014 this may take a moment\u2026", "info");
 
   const data = await doExtract();
   if (!data) {
@@ -565,40 +617,50 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   /* -- Header -- */
-  $("btn-settings").addEventListener("click", () => showSettingsPanel(true));
+  bindEvent(["btn-settings"], "click", () => showSettingsPanel(true));
 
   /* -- Settings panel -- */
-  $("btn-settings-save").addEventListener("click", saveSettings);
-  $("btn-settings-cancel").addEventListener("click", () =>
+  bindEvent(["btn-settings-save"], "click", saveSettings);
+  bindEvent(["btn-settings-cancel"], "click", () =>
     showSettingsPanel(false)
   );
 
   /* -- Recording -- */
-  $("btn-start-recording").addEventListener("click", openRecorder);
-  $("input-video-url").addEventListener("change", (e) => {
-    const url = e.target.value.trim();
-    try {
-      new URL(url); // validate
-      if (url) {
-        setVideoUrl(url);
-      }
-    } catch (_) {
-      // ignore invalid URLs
-    }
-  });
-  $("btn-remove-video").addEventListener("click", removeVideo);
+  bindEvent(["btn-start-recording"], "click", openRecorder);
+  bindEvent(["btn-remove-video"], "click", removeVideo);
 
-  /* -- Client name -- */
-  $("input-client-name").addEventListener("input", (e) => {
-    state.clientName = e.target.value.trim();
-  });
+  /* -- Upload video from device -- */
+  const uploadInput = $("input-upload-video");
+  if (uploadInput) {
+    uploadInput.addEventListener("change", () => {
+      const file = uploadInput.files?.[0];
+      if (!file) return;
+      // Validate it's a video
+      if (!file.type.startsWith("video/")) {
+        showStatus("Please select a video file.", "error");
+        uploadInput.value = "";
+        return;
+      }
+      const blob = new Blob([file], { type: file.type });
+      const size = file.size;
+      showRecordedVideo(blob, null, size);
+      // Update meta label with filename
+      const meta = $("video-meta");
+      if (meta) meta.textContent = file.name + (size ? "  ·  " + formatBytes(size) : "");
+      // Save to IDB so background.js can attach it to the webhook FormData
+      saveUploadToIDB(blob, file.name).catch((err) =>
+        showStatus("Could not save video: " + err.message, "error")
+      );
+      uploadInput.value = ""; // reset so the same file can be re-selected
+    });
+  }
 
   /* -- Send -- */
-  $("btn-send").addEventListener("click", sendToWebhook);
-  $("btn-open-settings-from-warning").addEventListener("click", () =>
+  bindEvent(["btn-send"], "click", sendToWebhook);
+  bindEvent(["btn-open-settings-from-warning"], "click", () =>
     showSettingsPanel(true)
   );
 
   /* -- Response -- */
-  $("btn-copy-all").addEventListener("click", copyAll);
+  bindEvent(["btn-copy-all"], "click", copyAll);
 });

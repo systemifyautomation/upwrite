@@ -26,38 +26,80 @@ let timerInterval = null;
 let drawInterval  = null;
 let isRecording   = false;
 
-const vidScreen = document.getElementById("vid-screen");
+const vidScreen = (() => {
+  const el = document.getElementById("vid-screen") || document.createElement("video");
+  el.id = "vid-screen"; el.autoplay = true; el.muted = true;
+  el.setAttribute("playsinline", ""); el.style.display = "none";
+  if (!el.parentNode) document.body.appendChild(el);
+  return el;
+})();
 const vidCam    = document.getElementById("vid-cam");
-const mixCanvas = document.getElementById("mix-canvas");
-const ctx2d     = mixCanvas ? mixCanvas.getContext("2d") : null;
+const mixCanvas = (() => {
+  const el = document.getElementById("mix-canvas") || document.createElement("canvas");
+  el.id = "mix-canvas"; el.style.display = "none";
+  if (!el.parentNode) document.body.appendChild(el);
+  return el;
+})();
+const ctx2d     = mixCanvas.getContext("2d");
 const statusEl  = document.getElementById("status");
 
 function setStatus(text) {
   if (statusEl) statusEl.textContent = text;
 }
 
-/* ── Handshake with background SW ───────────────────────────────────────
-   The SW calls chooseDesktopMedia so the picker appears in the user's
-   current window. Once the user selects a source the SW opens this page
-   and we signal RECORDER_READY; the SW replies with START_WITH_STREAM_ID.
-   ─────────────────────────────────────────────────────────────────────── */
-chrome.runtime.sendMessage({ type: "RECORDER_READY" }, (response) => {
-  if (chrome.runtime.lastError || !response?.streamId) {
-    setStatus("Failed to receive stream ID.");
-    chrome.runtime.sendMessage({
-      type: "RECORDING_COMPLETE", ok: false,
-      error: "No stream ID received from background.",
-    }).catch(() => {});
-    setTimeout(() => window.close(), 2000);
-    return;
-  }
-  startRecording(response.streamId).catch((err) => {
-    chrome.runtime.sendMessage({
-      type: "RECORDING_COMPLETE", ok: false, error: String(err),
-    }).catch(() => {});
-    window.close();
+/* ── UI state machine ────────────────────────────────────────────────── */
+const STATES = ["idle", "requesting", "recording", "stopped"];
+function showState(name) {
+  STATES.forEach((s) => {
+    const el = document.getElementById("state-" + s);
+    if (el) el.classList.toggle("r-state--hidden", s !== name);
   });
-});
+}
+
+function showError(msg) {
+  const el = document.getElementById("r-error");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("r-state--hidden");
+  setTimeout(() => el.classList.add("r-state--hidden"), 6000);
+}
+
+/* ── Bootstrap — wire buttons; getDisplayMedia fires only on btn-start click ── */
+(function () {
+  const btnStart    = document.getElementById("btn-start");
+  const btnStop     = document.getElementById("btn-stop");
+  const btnDone     = document.getElementById("btn-done");
+  const btnRerecord = document.getElementById("btn-rerecord");
+  const btnClose    = document.getElementById("btn-close");
+
+  if (btnStart) {
+    btnStart.addEventListener("click", () => {
+      showState("requesting");
+      startRecording().catch((err) => {
+        showState("idle");
+        showError(String(err));
+        chrome.runtime.sendMessage({
+          type: "RECORDING_COMPLETE", ok: false, error: String(err),
+        }).catch(() => {});
+      });
+    });
+  }
+
+  if (btnStop) btnStop.addEventListener("click", () => stopRecording());
+  if (btnDone) btnDone.addEventListener("click", () => window.close());
+  if (btnRerecord) btnRerecord.addEventListener("click", () => showState("idle"));
+  if (btnClose) {
+    btnClose.addEventListener("click", () => {
+      if (isRecording) stopRecording();
+      else {
+        chrome.runtime.sendMessage({
+          type: "RECORDING_COMPLETE", ok: false, error: "Recording cancelled.",
+        }).catch(() => {});
+        window.close();
+      }
+    });
+  }
+})();
 
 /* ── IDB helpers ────────────────────────────────────────────────────────
    recorder.html shares the extension origin so it can write directly to
@@ -145,23 +187,21 @@ function drawCameraBubble() {
 }
 
 /* ── Main recording ──────────────────────────────────────────────────── */
-async function startRecording(streamId) {
+async function startRecording() {
   if (isRecording) return;
 
   setStatus("Capturing screen\u2026");
 
-  // Screen + system audio (mandatory constraints — required by Chrome for desktop capture)
+  // Extension pages can call getDisplayMedia directly — no streamId needed.
+  // IMPORTANT: this must be called from a user gesture (btn-start click).
   try {
-    screenStream = await navigator.mediaDevices.getUserMedia({
-      video: { mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: streamId } },
-      audio: { mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: streamId } },
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 } },
+      audio: true,
     });
-  } catch (_) {
-    // Source may not provide audio — retry video-only
-    screenStream = await navigator.mediaDevices.getUserMedia({
-      video: { mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: streamId } },
-      audio: false,
-    });
+  } catch (err) {
+    // User cancelled the picker or permission denied
+    throw err; // caller (btn-start handler) shows error + resets state
   }
 
   // Camera PiP (optional)
@@ -213,7 +253,7 @@ async function startRecording(streamId) {
 
   let recordStream;
   if (cameraStream) {
-    const canvasStream = mixCanvas.captureStream(0); // 0 = manual frame timing via rAF
+    const canvasStream = mixCanvas.captureStream(30); // 30fps — captureStream(0) requires manual requestFrame() calls and produces no data
     recordStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
     startCanvasDraw();
   } else {
@@ -242,13 +282,26 @@ async function startRecording(streamId) {
   mediaRecorder.onstop = onRecordingStop;
   mediaRecorder.start(250);
 
-  // Timer — relayed to background, which forwards to the overlay
+  setStatus("Recording\u2026");
+
+  // Show recorder.html recording state
+  showState("recording");
+  const pipEl = document.getElementById("r-pip");
+  if (pipEl) pipEl.classList.toggle("r-pip--hidden", !cameraStream);
+
+  // Timer — drives recorder.html display and relays ticks to overlay via background
+  const rTimer = document.getElementById("r-timer");
+  timerSeconds = 0;
   timerInterval = setInterval(() => {
     timerSeconds++;
+    if (rTimer) {
+      const m = String(Math.floor(timerSeconds / 60)).padStart(2, "0");
+      const s = String(timerSeconds % 60).padStart(2, "0");
+      rTimer.textContent = m + ":" + s;
+    }
     chrome.runtime.sendMessage({ type: "RECORDING_TICK", seconds: timerSeconds }).catch(() => {});
   }, 1000);
 
-  setStatus("Recording\u2026");
   chrome.runtime.sendMessage({ type: "RECORDING_STARTED" }).catch(() => {});
 }
 
@@ -302,12 +355,20 @@ async function onRecordingStop() {
       type: "RECORDING_COMPLETE", ok: true,
       size: buffer.byteLength, duration, mimeType: mime,
     }).catch(() => {});
+    // Show stopped state with duration
+    const durEl = document.getElementById("r-duration");
+    if (durEl) {
+      const m = String(Math.floor(duration / 60)).padStart(2, "0");
+      const s = String(duration % 60).padStart(2, "0");
+      durEl.textContent = "Recorded " + m + ":" + s;
+    }
+    showState("stopped");
   } catch (err) {
     chrome.runtime.sendMessage({
       type: "RECORDING_COMPLETE", ok: false, error: String(err),
     }).catch(() => {});
+    window.close();
   }
-  window.close();
 }
 
 /* ── Message handler ─────────────────────────────────────────────────── */
