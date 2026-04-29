@@ -166,24 +166,58 @@ function doExtract() {
 /*  Screen recording                                                    */
 /* ================================================================== */
 
-/** Load the recording buffer from chrome.storage.local.
- *  Content scripts write it there; popup and background SW read from it.
- *  This avoids all cross-realm ArrayBuffer issues that arise when going
- *  through IDB across different execution contexts.
- */
-async function loadRecordingFromStorage() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get("upwrite_recording", (items) => {
-      const rec = items.upwrite_recording;
-      if (!rec || !rec.buffer) return resolve(null);
-      try {
-        const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
-        resolve({ ...rec, blob });
-      } catch (_) {
-        resolve(null);
-      }
-    });
+/** Open the same IDB database the background service worker uses. */
+function openPopupDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("upwrite-db", 1);
+    req.onupgradeneeded = (e) => e.target.result.createObjectStore("recordings");
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror   = (e) => reject(e.target.error);
   });
+}
+
+/** Read the current recording blob directly from IndexedDB. */
+async function loadRecordingFromStorage() {
+  try {
+    const db = await openPopupDB();
+    return new Promise((resolve) => {
+      const tx  = db.transaction("recordings", "readonly");
+      const req = tx.objectStore("recordings").get("current");
+      req.onsuccess = (e) => {
+        const rec = e.target.result;
+        if (!rec) return resolve(null);
+        let blob;
+        if (rec.buffer instanceof ArrayBuffer) {
+          blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
+        } else if (rec.blob instanceof Blob) {
+          blob = rec.blob;
+        } else {
+          return resolve(null);
+        }
+        resolve({ ...rec, blob });
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Save an uploaded file blob into IDB so background.js can read it. */
+async function saveUploadToIDB(blob) {
+  try {
+    const buffer = await blob.arrayBuffer();
+    const db = await openPopupDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("recordings", "readwrite");
+      tx.objectStore("recordings").put(
+        { buffer, duration: 0, mimeType: blob.type || "video/webm", timestamp: Date.now(), size: buffer.byteLength },
+        "current"
+      );
+      tx.oncomplete = () => resolve();
+      tx.onerror    = (e) => reject(e.target.error);
+    });
+  } catch (_) { /* non-fatal */ }
 }
 
 function formatDuration(secs) {
@@ -260,20 +294,17 @@ function setVideoUrl(url) {
     state.videoBlobUrl = null;
   }
 
-  const display = pick("video-url-display", "loom-url-display");
-  if (display) {
-    display.textContent = truncateUrl(state.videoUrl, 38);
-    display.href = state.videoUrl;
-    display.classList.remove("hidden");
+  // Show a small confirmation under the URL input — no preview player needed.
+  let hint = $("video-url-set-hint");
+  if (!hint) {
+    hint = document.createElement("p");
+    hint.id = "video-url-set-hint";
+    hint.className = "video-mode-auto-hint";
+    const panel = $("video-mode-url");
+    if (panel) panel.appendChild(hint);
   }
+  hint.textContent = "✓ URL saved — will be sent with the proposal.";
 
-  const preview = pick("video-preview");
-  if (preview) {
-    preview.src = state.videoUrl;
-  }
-
-  show(pick("video-recorded", "loom-recorded"));
-  hide(pick("video-not-recorded", "loom-not-recorded"));
   updateSendButton();
 }
 
@@ -285,17 +316,15 @@ function removeVideo() {
   state.videoUrl  = "";
   state.videoBlob = null;
   state.hasVideo  = false;
+
   const videoInput = pick("input-video-url", "input-loom-url");
   if (videoInput) videoInput.value = "";
 
+  const urlHint = $("video-url-set-hint");
+  if (urlHint) urlHint.textContent = "";
+
   const preview = pick("video-preview");
   if (preview) { preview.src = ""; preview.load(); }
-
-  const display = pick("video-url-display", "loom-url-display");
-  if (display) {
-    display.textContent = "";
-    display.removeAttribute("href");
-  }
 
   hide(pick("video-recorded", "loom-recorded"));
   show(pick("video-not-recorded", "loom-not-recorded"));
@@ -408,14 +437,15 @@ async function sendToWebhook() {
 
   // Write the job to storage. The background picks it up via storage.onChanged,
   // which is immune to the popup closing (unlike sendMessage which dies with the port).
+  const videoMode = $("video-mode-select")?.value || "record";
+
   chrome.storage.local.set({
     upwrite_pending: {
-      tabId:      state.activeTabId,
-      webhookUrl: state.webhookUrl,
+      tabId:          state.activeTabId,
+      webhookUrl:     state.webhookUrl,
       payload,
-      // state.videoBlob is a Blob and cannot be serialized into chrome.storage.
-      // The blob is already in IndexedDB — hasVideo just tells the SW to fetch it.
-      hasVideo:   state.hasVideo,
+      hasVideo:       state.hasVideo,
+      screenshotMode: videoMode === "auto",
     },
   });
 }
@@ -603,6 +633,53 @@ document.addEventListener("DOMContentLoaded", async () => {
   /* -- Recording -- */
   bindEvent(["btn-start-recording"], "click", openRecorder);
   bindEvent(["btn-remove-video"], "click", removeVideo);
+
+  /* -- Video mode dropdown -- */
+  const modeSelect  = $("video-mode-select");
+  const modePanels  = {
+    record: $("video-mode-record"),
+    upload: $("video-mode-upload"),
+    url:    $("video-mode-url"),
+    auto:   $("video-mode-auto"),
+  };
+  function switchVideoMode(mode) {
+    Object.entries(modePanels).forEach(([key, el]) => {
+      if (!el) return;
+      el.classList.toggle("hidden", key !== mode);
+    });
+  }
+  if (modeSelect) {
+    modeSelect.addEventListener("change", () => switchVideoMode(modeSelect.value));
+  }
+
+  /* -- Video URL input -- */
+  const urlInput = $("input-video-url");
+  if (urlInput) {
+    urlInput.addEventListener("change", () => {
+      const val = urlInput.value.trim();
+      if (val) setVideoUrl(val);
+    });
+    urlInput.addEventListener("paste", () => {
+      setTimeout(() => {
+        const val = urlInput.value.trim();
+        if (val) setVideoUrl(val);
+      }, 0);
+    });
+  }
+
+  /* -- Video file upload -- */
+  const uploadInput = $("input-upload-video");
+  if (uploadInput) {
+    uploadInput.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      showStatus("Loading video…", "info");
+      await saveUploadToIDB(file);
+      showRecordedVideo(file, null, file.size);
+      clearStatus();
+      uploadInput.value = "";
+    });
+  }
 
   /* -- Send -- */
   bindEvent(["btn-send"], "click", sendToWebhook);

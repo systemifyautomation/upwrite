@@ -414,7 +414,7 @@ async function captureJobTitleScreenshot(tabId) {
   }
 }
 
-async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
+async function processProposal({ tabId, webhookUrl, payload, hasVideo, screenshotMode }) {
   // Start the keepalive alarm — cleared in the finally block
   chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 });
 
@@ -430,19 +430,25 @@ async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
     let usedScreenshot = false;
     let screenshotError = null;
 
-    if (hasVideo) {
+    // Only attempt to read a recorded/uploaded blob from IDB when the user's
+    // chosen mode can actually produce one (not auto-mode, not URL mode).
+    // This prevents a leftover blob from a previous submission being reused.
+    const canHaveBlob = !screenshotMode && !payload.videoUrl;
+    if (canHaveBlob) {
       try {
         const rec = await getRecordingFromIDB();
         if (rec?.blob) {
           const ext = rec.blob.type.includes("mp4") ? "mp4" : "webm";
           formData.append("video", rec.blob, `recording.${ext}`);
           uploadedVideo = true;
+          // Delete immediately so it isn't reused on the next submission.
+          await deleteRecordingFromIDB().catch(() => {});
         }
-      } catch (_) { /* blob unavailable — send without video field */ }
+      } catch (_) { /* blob unavailable — continue */ }
     }
 
-    // If no video file is attached, send a screenshot of the job title area instead.
-    if (!uploadedVideo) {
+    // Only take a screenshot when the user explicitly chose "Automated screenshot" mode.
+    if (screenshotMode && !uploadedVideo && !payload.videoUrl) {
       const capture = await captureJobTitleScreenshot(tabId);
       screenshotError = capture.error;
       if (capture.blob) {
