@@ -328,6 +328,92 @@ chrome.storage.onChanged.addListener((changes, area) => {
   processProposal(job);
 });
 
+async function scrollToJobTitle(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const selectors = [
+          "h3.h5",
+          "h1.job-title",
+          "[data-test='job-title']",
+          "[data-qa='job-title']",
+          "h1[class*='title']",
+          "h1",
+        ];
+
+        let titleEl = null;
+        for (const selector of selectors) {
+          try {
+            const el = document.querySelector(selector);
+            if (el) {
+              titleEl = el;
+              break;
+            }
+          } catch (_) {
+            // ignore invalid selectors
+          }
+        }
+
+        if (titleEl) {
+          titleEl.scrollIntoView({ behavior: "auto", block: "start" });
+          // Keep some breathing room above the title for cleaner screenshots.
+          window.scrollBy(0, -12);
+          return true;
+        }
+
+        window.scrollTo({ top: 0, behavior: "auto" });
+        return false;
+      },
+    });
+  } catch (_) {
+    // Non-fatal: capture can still be attempted.
+  }
+}
+
+async function focusTabForCapture(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab?.windowId) return null;
+
+  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+
+  // Give Chrome a short moment to switch active tab and paint.
+  await new Promise((resolve) => setTimeout(resolve, 180));
+
+  return tab;
+}
+
+async function captureJobTitleScreenshot(tabId) {
+  try {
+    const tab = await focusTabForCapture(tabId);
+    if (!tab?.windowId) {
+      return { blob: null, error: "Tab/window not available for screenshot." };
+    }
+
+    await scrollToJobTitle(tabId);
+    // Give the tab one paint frame to settle after scroll before capture.
+    await new Promise((resolve) => setTimeout(resolve, 220));
+
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: "png",
+    });
+
+    if (!dataUrl || !dataUrl.startsWith("data:image/")) {
+      return { blob: null, error: "captureVisibleTab returned empty data URL." };
+    }
+
+    const blob = await fetch(dataUrl).then((r) => r.blob());
+    if (!blob || blob.size === 0) {
+      return { blob: null, error: "Captured image blob is empty." };
+    }
+
+    return { blob, error: null };
+  } catch (err) {
+    return { blob: null, error: String(err) };
+  }
+}
+
 async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
   // Start the keepalive alarm — cleared in the finally block
   chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 });
@@ -339,7 +425,10 @@ async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
     //    (n8n receives it in $json.payload, identical in both cases)
     //  • "video" field   — binary recording, present only when hasVideo is true
     const formData = new FormData();
-    formData.append("payload", JSON.stringify(payload));
+
+    let uploadedVideo = false;
+    let usedScreenshot = false;
+    let screenshotError = null;
 
     if (hasVideo) {
       try {
@@ -347,9 +436,37 @@ async function processProposal({ tabId, webhookUrl, payload, hasVideo }) {
         if (rec?.blob) {
           const ext = rec.blob.type.includes("mp4") ? "mp4" : "webm";
           formData.append("video", rec.blob, `recording.${ext}`);
+          uploadedVideo = true;
         }
       } catch (_) { /* blob unavailable — send without video field */ }
     }
+
+    // If no video file is attached, send a screenshot of the job title area instead.
+    if (!uploadedVideo) {
+      const capture = await captureJobTitleScreenshot(tabId);
+      screenshotError = capture.error;
+      if (capture.blob) {
+        formData.append("screenshot", capture.blob, `job-title-${Date.now()}.png`);
+        usedScreenshot = true;
+      }
+    }
+
+    // Include lightweight context flags to simplify n8n branching and debugging.
+    const contextImageType = uploadedVideo ? "video" : (usedScreenshot ? "screenshot" : "none");
+    formData.append("context_image_type", contextImageType);
+    if (screenshotError) {
+      formData.append("context_image_error", screenshotError.slice(0, 500));
+    }
+    formData.append("payload", JSON.stringify(payload));
+
+    chrome.storage.local.set({
+      upwrite_last_context_capture: {
+        tabId,
+        type: contextImageType,
+        error: screenshotError || null,
+        timestamp: Date.now(),
+      },
+    });
 
     const res = await fetch(webhookUrl, { method: "POST", body: formData });
 

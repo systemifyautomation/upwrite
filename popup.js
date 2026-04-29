@@ -166,49 +166,23 @@ function doExtract() {
 /*  Screen recording                                                    */
 /* ================================================================== */
 
-/** Save an uploaded File/Blob to the same IDB slot that recorder.js uses,
- *  so background.js can attach it to the webhook FormData via hasVideo.
+/** Load the recording buffer from chrome.storage.local.
+ *  Content scripts write it there; popup and background SW read from it.
+ *  This avoids all cross-realm ArrayBuffer issues that arise when going
+ *  through IDB across different execution contexts.
  */
-async function saveUploadToIDB(blob, filename) {
-  const buffer = await blob.arrayBuffer();
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open("upwrite-db", 1);
-    req.onupgradeneeded = (e) => e.target.result.createObjectStore("recordings");
-    req.onerror = () => reject(new Error("IDB open failed"));
-    req.onsuccess = (e) => {
-      const db = e.target.result;
-      const tx = db.transaction("recordings", "readwrite");
-      tx.objectStore("recordings").put(
-        { buffer, mimeType: blob.type || "video/webm", duration: 0,
-          size: buffer.byteLength, timestamp: Date.now(), filename },
-        "current"
-      );
-      tx.oncomplete = () => resolve();
-      tx.onerror    = (ev) => reject(ev.target.error);
-    };
-  });
-}
-
-/** Load the recording directly from IndexedDB — popup shares the extension origin. */
 async function loadRecordingFromStorage() {
   return new Promise((resolve) => {
-    const req = indexedDB.open("upwrite-db", 1);
-    req.onupgradeneeded = (e) => e.target.result.createObjectStore("recordings");
-    req.onerror = () => resolve(null);
-    req.onsuccess = (e) => {
-      const db = e.target.result;
-      const tx = db.transaction("recordings", "readonly");
-      const get = tx.objectStore("recordings").get("current");
-      get.onsuccess = (ev) => {
-        const rec = ev.target.result;
-        if (!rec) return resolve(null);
-        try {
-          const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
-          resolve({ ...rec, blob });
-        } catch (_) { resolve(null); }
-      };
-      get.onerror = () => resolve(null);
-    };
+    chrome.storage.local.get("upwrite_recording", (items) => {
+      const rec = items.upwrite_recording;
+      if (!rec || !rec.buffer) return resolve(null);
+      try {
+        const blob = new Blob([rec.buffer], { type: rec.mimeType || "video/webm" });
+        resolve({ ...rec, blob });
+      } catch (_) {
+        resolve(null);
+      }
+    });
   });
 }
 
@@ -329,6 +303,7 @@ function removeVideo() {
 
   // Remove from extension storage and background state
   chrome.runtime.sendMessage({ type: "DELETE_RECORDING" });
+  chrome.storage.local.remove("upwrite_recording");
 }
 
 function truncateUrl(url, maxLen) {
@@ -628,32 +603,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   /* -- Recording -- */
   bindEvent(["btn-start-recording"], "click", openRecorder);
   bindEvent(["btn-remove-video"], "click", removeVideo);
-
-  /* -- Upload video from device -- */
-  const uploadInput = $("input-upload-video");
-  if (uploadInput) {
-    uploadInput.addEventListener("change", () => {
-      const file = uploadInput.files?.[0];
-      if (!file) return;
-      // Validate it's a video
-      if (!file.type.startsWith("video/")) {
-        showStatus("Please select a video file.", "error");
-        uploadInput.value = "";
-        return;
-      }
-      const blob = new Blob([file], { type: file.type });
-      const size = file.size;
-      showRecordedVideo(blob, null, size);
-      // Update meta label with filename
-      const meta = $("video-meta");
-      if (meta) meta.textContent = file.name + (size ? "  ·  " + formatBytes(size) : "");
-      // Save to IDB so background.js can attach it to the webhook FormData
-      saveUploadToIDB(blob, file.name).catch((err) =>
-        showStatus("Could not save video: " + err.message, "error")
-      );
-      uploadInput.value = ""; // reset so the same file can be re-selected
-    });
-  }
 
   /* -- Send -- */
   bindEvent(["btn-send"], "click", sendToWebhook);
