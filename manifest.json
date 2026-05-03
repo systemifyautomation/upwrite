@@ -3,7 +3,7 @@
   "name": "UpWrite – Upwork Proposal Assistant",
   "short_name": "UpWrite",
   "version": "1.0.0",
-  "description": "Extract Upwork proposal details, record a Loom video, and auto-generate AI proposals via your n8n webhook.",
+  "description": "Auto-generate winning Upwork proposals with AI. Reads job details from the page, attaches a video or screenshot for context, and fills your cover letter and screening questions in seconds.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
