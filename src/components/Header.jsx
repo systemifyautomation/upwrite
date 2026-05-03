@@ -12,6 +12,7 @@ export default function Header() {
         <ul>
           <li><a href="/#how-it-works">How It Works</a></li>
           <li><a href="/#features">Features</a></li>
+          <li><a href="/#pricing">Pricing</a></li>
           <li><a href="/#install">Install</a></li>
           <li><a href="/#faq">FAQ</a></li>
           <li><Link to="/blog">Blog</Link></li>

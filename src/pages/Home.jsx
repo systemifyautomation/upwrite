@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Bot, Search, ClipboardList, CheckCircle,
+  Bot,
   FileText, HelpCircle, Video, Webhook, MousePointerClick, ShieldCheck,
-  Lock, Target, Mail, ChevronRight, ArrowDown, ExternalLink, MessageCircle, Send
+  Lock, Target, Mail, ChevronRight, ArrowDown, ExternalLink, MessageCircle, Send, UserCircle, CircleCheck, Users, Crown
 } from 'lucide-react';
 import AdSlot from '../components/AdSlot';
 
@@ -36,12 +36,24 @@ const faqs = [
 
 export default function Home() {
   const [openFaq, setOpenFaq] = useState(null);
-  const [form, setForm] = useState({ name: '', email: '', message: '' });
+  const [form, setForm] = useState({ name: '', email: '', upwork: '' });
+  const [formStatus, setFormStatus] = useState('idle'); // idle | loading | success | error
 
-  const handleContact = (e) => {
+  const handleContact = async (e) => {
     e.preventDefault();
-    const msg = `Hi, I'm ${form.name} (${form.email}).\n\n${form.message}`;
-    window.open(`https://wa.me/16467776492?text=${encodeURIComponent(msg)}`, '_blank');
+    setFormStatus('loading');
+    try {
+      const res = await fetch(import.meta.env.VITE_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: form.name, email: form.email, upworkProfile: form.upwork }),
+      });
+      if (!res.ok) throw new Error('Request failed');
+      setFormStatus('success');
+      setForm({ name: '', email: '', upwork: '' });
+    } catch {
+      setFormStatus('error');
+    }
   };
 
   // Scroll to hash on mount (handles /#section navigation from other pages)
@@ -73,8 +85,8 @@ export default function Home() {
         <div className="container">
           <div className="hero-grid">
             <div className="hero-content">
-              <div className="eyebrow"><Bot size={14} /> AI-Powered Proposals</div>
-              <h1>Win More Upwork Jobs with <em>AI-Written</em> Proposals</h1>
+              <div className="eyebrow"><Bot size={14} /> Auto-Generated Proposals</div>
+              <h1>Win More Upwork Jobs by Being the <em>1st to Apply</em> While Maintaining Personalization</h1>
               <p>UpWrite is an open-source Chrome extension that reads your Upwork job listing and auto-generates a tailored cover letter and question answers — so you can focus on the work, not the paperwork.</p>
               <div className="hero-actions">
                 <a href="https://github.com/systemifyautomation" target="_blank" rel="noopener noreferrer" className="btn btn-primary"><ExternalLink size={16} /> View on GitHub</a>
@@ -93,7 +105,7 @@ export default function Home() {
                 <div className="browser-body">
                   <div className="mock-field">
                     <strong>Job Title</strong>
-                    Build a React dashboard for SaaS analytics
+                    We're looking for an expert on React &amp; Node.js SaaS development
                   </div>
                   <div className="mock-field">
                     <strong>Cover Letter</strong>
@@ -105,7 +117,7 @@ export default function Home() {
                     <div className="mock-text-line"></div>
                   </div>
                   <div className="mock-field">
-                    <strong>Follow-up Q: What's your React experience?</strong>
+                    <strong>Follow-up Q: Describe your recent similar experience</strong>
                     <div className="mock-text-line medium"></div>
                     <div className="mock-text-line short"></div>
                   </div>
@@ -149,6 +161,35 @@ export default function Home() {
         </div>
       </section>
 
+      {/* PROFILE SETUP NOTICE */}
+      <section className="section">
+        <div className="container">
+          <div className="setup-notice reveal">
+            <div className="setup-notice-icon"><UserCircle size={36} /></div>
+            <div className="setup-notice-body">
+              <h2>Before You Start: Add Your Freelancer Profile</h2>
+              <p>
+                UpWrite generates proposals based on <strong>your</strong> background, skills, and experience.
+                Before using the extension, you need to fill in your profile inside the n8n workflow —
+                things like your name, niche, past projects, key skills, and tone of voice.
+              </p>
+              <p>
+                Without this, the AI has nothing real to work with and will produce generic,
+                hollow proposals that may contain inaccuracies about you. The quality of every
+                proposal is directly tied to the quality of the profile you provide.
+              </p>
+              <div className="setup-checklist">
+                <div className="setup-check"><CircleCheck size={16} /> Your name and professional title</div>
+                <div className="setup-check"><CircleCheck size={16} /> Your niche and core skills</div>
+                <div className="setup-check"><CircleCheck size={16} /> 2–3 past project examples</div>
+                <div className="setup-check"><CircleCheck size={16} /> Your preferred tone and style</div>
+                <div className="setup-check"><CircleCheck size={16} /> Any links you want included (portfolio, LinkedIn, etc.)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* HOW IT WORKS */}
       <section id="how-it-works" className="section section-alt">
         <div className="container">
@@ -156,13 +197,12 @@ export default function Home() {
           <h2>From Job Listing to Winning Proposal<br />in 4 Simple Steps</h2>
           <div className="steps-grid">
             {[
-              { icon: <Search size={28} />, title: 'Open an Upwork Proposal', desc: 'Navigate to any job on Upwork and click "Submit a Proposal." UpWrite activates automatically on the proposal page.' },
-              { icon: <ClipboardList size={28} />, title: 'Data Is Extracted', desc: 'The extension reads the job title, full description, client name, budget, cover-letter field, and any follow-up questions directly from the page.' },
-              { icon: <Bot size={28} />, title: 'AI Writes Your Proposal', desc: 'All extracted data is sent to your private n8n webhook. Your AI workflow crafts a tailored cover letter and answers every client question.' },
-              { icon: <CheckCircle size={28} />, title: 'Form Is Auto-Filled', desc: 'UpWrite receives the AI response and instantly populates the Upwork cover-letter field and all follow-up answers. Review and submit!' },
+              { title: 'Open a Proposal', desc: 'Navigate to any Upwork job and click "Submit a Proposal." UpWrite activates automatically on the proposal page.' },
+              { title: 'Click "Generate Proposal"', desc: 'Hit the UpWrite button that appears on the proposal form. It reads the job details and sends them to your AI workflow.' },
+              { title: 'Fill Other Details & Wait', desc: 'Complete any remaining fields while the AI works. In seconds your cover letter and question answers are ready.' },
+              { title: 'Done', desc: 'UpWrite populates every field automatically. Review, make any tweaks, and hit submit.' },
             ].map((step, i) => (
               <div className="step-card reveal" key={i}>
-                <div className="step-icon">{step.icon}</div>
                 <div className="step-num">{i + 1}</div>
                 <h3>{step.title}</h3>
                 <p>{step.desc}</p>
@@ -195,6 +235,143 @@ export default function Home() {
                 <p>{f.desc}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* DIY vs DFY */}
+      <section className="section section-alt">
+        <div className="container">
+          <div className="tag" style={{ textAlign: 'center', display: 'block' }}>How to Get UpWrite</div>
+          <h2 style={{ textAlign: 'center' }}>Two Ways to Use UpWrite</h2>
+          <p style={{ textAlign: 'center', maxWidth: 540, margin: '0 auto 48px', color: 'var(--muted)' }}>
+            Whether you want full control or a hands-off setup, there's an option for you.
+          </p>
+          <div className="diy-dfy-grid">
+            <div className="diy-dfy-card reveal">
+              <div className="diy-dfy-badge">DIY</div>
+              <h3>Self-Hosted</h3>
+              <p className="diy-dfy-sub">Free &amp; open source</p>
+              <ul className="diy-dfy-list">
+                <li><CircleCheck size={15} /> Clone the repo from GitHub</li>
+                <li><CircleCheck size={15} /> Load the extension unpacked in Chrome</li>
+                <li><CircleCheck size={15} /> Set up your own n8n instance (cloud or VPS)</li>
+                <li><CircleCheck size={15} /> Import the workflow template and configure your AI</li>
+                <li><CircleCheck size={15} /> Full control over prompts, models, and data</li>
+              </ul>
+              <a
+                href="https://github.com/systemifyautomation"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-outline"
+                style={{ marginTop: 'auto', justifyContent: 'center' }}
+              >
+                <ExternalLink size={15} /> View on GitHub
+              </a>
+            </div>
+            <div className="diy-dfy-card diy-dfy-card--featured reveal">
+              <div className="diy-dfy-badge diy-dfy-badge--green">DFY</div>
+              <h3>Done For You</h3>
+              <p className="diy-dfy-sub">Setup fee + monthly support</p>
+              <ul className="diy-dfy-list">
+                <li><CircleCheck size={15} /> I install and configure everything for you</li>
+                <li><CircleCheck size={15} /> Dedicated n8n instance — fully hosted and managed</li>
+                <li><CircleCheck size={15} /> AI workflow tuned to your profile and niche</li>
+                <li><CircleCheck size={15} /> Ongoing maintenance, updates, and support</li>
+                <li><CircleCheck size={15} /> No technical knowledge required</li>
+              </ul>
+              <a
+                href="#contact"
+                className="btn btn-primary"
+                style={{ marginTop: 'auto', justifyContent: 'center' }}
+              >
+                <Mail size={15} /> Get Early Access
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* PRICING */}
+      <section id="pricing" className="section">
+        <div className="container">
+          <div className="tag" style={{ textAlign: 'center', display: 'block' }}>Pricing</div>
+          <h2 style={{ textAlign: 'center' }}>Simple, Transparent Pricing</h2>
+          <p style={{ textAlign: 'center', maxWidth: 520, margin: '0 auto 48px', color: 'var(--muted)' }}>
+            Start free and self-host, or let us handle everything end-to-end.
+          </p>
+          <div className="pricing-grid">
+
+            {/* Tier 1 */}
+            <div className="pricing-card reveal">
+              <div className="pricing-icon"><ExternalLink size={22} /></div>
+              <h3>Free Forever</h3>
+              <div className="pricing-price">$0</div>
+              <p className="pricing-desc">Self-hosted. Full source code on GitHub. You own everything.</p>
+              <ul className="pricing-features">
+                <li><CircleCheck size={14} /> Open-source extension</li>
+                <li><CircleCheck size={14} /> Bring your own n8n instance</li>
+                <li><CircleCheck size={14} /> Bring your own AI API key</li>
+                <li><CircleCheck size={14} /> Full control over prompts &amp; data</li>
+                <li><CircleCheck size={14} /> Community support via GitHub</li>
+              </ul>
+              <a
+                href="https://github.com/systemifyautomation"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-outline"
+                style={{ justifyContent: 'center', marginTop: 'auto' }}
+              >
+                View on GitHub
+              </a>
+            </div>
+
+            {/* Tier 2 */}
+            <div className="pricing-card reveal">
+              <div className="pricing-icon"><Users size={22} /></div>
+              <h3>Full Setup &amp; Handover</h3>
+              <div className="pricing-price">$3,000 <span>one-time</span></div>
+              <p className="pricing-desc">We set everything up and hand it over to you — plus access to our public Skool community.</p>
+              <ul className="pricing-features">
+                <li><CircleCheck size={14} /> Full installation &amp; configuration</li>
+                <li><CircleCheck size={14} /> n8n workflow tuned to your profile</li>
+                <li><CircleCheck size={14} /> AI prompts customized for your niche</li>
+                <li><CircleCheck size={14} /> Complete handover with documentation</li>
+                <li><CircleCheck size={14} /> Access to the public Skool community</li>
+              </ul>
+              <a
+                href="#contact"
+                className="btn btn-outline"
+                style={{ justifyContent: 'center', marginTop: 'auto' }}
+              >
+                <Mail size={14} /> Get in Touch
+              </a>
+            </div>
+
+            {/* Tier 3 */}
+            <div className="pricing-card pricing-card--featured reveal">
+              <div className="pricing-label">Most Complete</div>
+              <div className="pricing-icon pricing-icon--white"><Crown size={22} /></div>
+              <h3>Full Service &amp; Mentorship</h3>
+              <div className="pricing-price">Let's Talk</div>
+              <p className="pricing-desc">Everything done for you, ongoing — plus access to an exclusive community and direct mentorship.</p>
+              <ul className="pricing-features">
+                <li><CircleCheck size={14} /> Everything in Full Setup</li>
+                <li><CircleCheck size={14} /> Ongoing maintenance &amp; updates</li>
+                <li><CircleCheck size={14} /> Upwork TOS compliance monitoring</li>
+                <li><CircleCheck size={14} /> Projects we land — available to you first</li>
+                <li><CircleCheck size={14} /> Selective private Skool community</li>
+                <li><CircleCheck size={14} /> 1-on-1 calls: tips, guidance &amp; mentorship</li>
+              </ul>
+              <a
+                href="#contact"
+                className="btn btn-primary"
+                style={{ justifyContent: 'center', marginTop: 'auto' }}
+              >
+                <Mail size={14} /> Apply for Access
+              </a>
+            </div>
+
           </div>
         </div>
       </section>
@@ -293,9 +470,9 @@ export default function Home() {
       <section id="contact" className="section">
         <div className="container">
           <div className="tag" style={{ display: 'block', textAlign: 'center' }}>Get in Touch</div>
-          <h2 style={{ textAlign: 'center', marginTop: 0 }}>Interested in UpWrite?</h2>
+          <h2 style={{ textAlign: 'center', marginTop: 0 }}>Get Early Access</h2>
           <p style={{ textAlign: 'center', maxWidth: 520, margin: '0 auto 48px', color: 'var(--muted)' }}>
-            Reach out to discuss access, setup, and monthly hosting. All onboarding is handled personally.
+            Leave your details and I'll get back to you to discuss setup and managed hosting.
           </p>
           <div className="contact-grid">
             <form className="contact-form reveal" onSubmit={handleContact}>
@@ -314,15 +491,30 @@ export default function Home() {
                 />
               </div>
               <div className="form-group">
-                <label htmlFor="c-msg">Message</label>
-                <textarea
-                  id="c-msg" rows={5} required
-                  placeholder="Tell me about your Upwork workflow and what you'd like to automate..."
-                  value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
+                <label htmlFor="c-upwork">Upwork Profile URL</label>
+                <input
+                  id="c-upwork" type="url" placeholder="https://upwork.com/freelancers/yourprofile" required
+                  value={form.upwork} onChange={e => setForm(f => ({ ...f, upwork: e.target.value }))}
                 />
               </div>
-              <button type="submit" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                <Send size={16} /> Send via WhatsApp
+              {formStatus === 'success' && (
+                <p style={{ color: 'var(--green-dk)', fontWeight: 600, textAlign: 'center' }}>
+                  Request sent! I'll be in touch soon.
+                </p>
+              )}
+              {formStatus === 'error' && (
+                <p style={{ color: '#dc2626', fontWeight: 600, textAlign: 'center' }}>
+                  Something went wrong. Please try emailing directly.
+                </p>
+              )}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ width: '100%', justifyContent: 'center' }}
+                disabled={formStatus === 'loading' || formStatus === 'success'}
+              >
+                <Send size={16} />
+                {formStatus === 'loading' ? 'Sending…' : 'Get Early Access'}
               </button>
             </form>
             <div className="contact-aside reveal">
