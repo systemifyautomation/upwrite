@@ -38,15 +38,40 @@ export default function Home() {
   const [openFaq, setOpenFaq] = useState(null);
   const [form, setForm] = useState({ name: '', email: '', upwork: '' });
   const [formStatus, setFormStatus] = useState('idle'); // idle | loading | success | error
+  const [formSource, setFormSource] = useState('direct');
+
+  const goToContact = (source) => {
+    setFormSource(source);
+    const el = document.getElementById('contact');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
 
   const handleContact = async (e) => {
     e.preventDefault();
     setFormStatus('loading');
     try {
+      let ip = 'unknown';
+      let country = 'unknown';
+      try {
+        const geo = await fetch('https://ipapi.co/json/');
+        if (geo.ok) {
+          const geoData = await geo.json();
+          ip = geoData.ip || 'unknown';
+          country = geoData.country_name || 'unknown';
+        }
+      } catch { /* geo lookup failed — continue without it */ }
+
       const res = await fetch(import.meta.env.VITE_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: form.name, email: form.email, upworkProfile: form.upwork }),
+        body: JSON.stringify({
+          name: form.name,
+          email: form.email,
+          upworkProfile: form.upwork,
+          source: formSource,
+          ip,
+          country,
+        }),
       });
       if (!res.ok) throw new Error('Request failed');
       setFormStatus('success');
@@ -157,9 +182,29 @@ export default function Home() {
               <h3>Flexible</h3>
               <p>Self-host free or get a fully managed setup</p>
             </div>
+            <div className="stat-item">
+              <h3>TOS-Compliant</h3>
+              <p>Built and actively maintained to stay within Upwork's Terms of Service</p>
+            </div>
           </div>
         </div>
       </section>
+
+      {/* TOS BANNER */}
+      <div className="tos-banner">
+        <div className="container">
+          <div className="tos-banner-inner reveal">
+            <ShieldCheck size={20} />
+            <span>
+              UpWrite is designed and actively maintained to comply with{' '}
+              <a href="https://www.upwork.com/legal#terms" target="_blank" rel="noopener noreferrer">
+                Upwork's Terms of Service
+              </a>
+              . We monitor TOS updates and adjust the tool accordingly so you can use it with confidence.
+            </span>
+          </div>
+        </div>
+      </div>
 
       {/* PROFILE SETUP NOTICE */}
       <section className="section">
@@ -280,13 +325,14 @@ export default function Home() {
                 <li><CircleCheck size={15} /> Ongoing maintenance, updates, and support</li>
                 <li><CircleCheck size={15} /> No technical knowledge required</li>
               </ul>
-              <a
-                href="#contact"
+              <button
+                type="button"
+                onClick={() => goToContact('dfy-section')}
                 className="btn btn-primary"
                 style={{ marginTop: 'auto', justifyContent: 'center' }}
               >
                 <Mail size={15} /> Get Early Access
-              </a>
+              </button>
             </div>
           </div>
         </div>
@@ -339,13 +385,14 @@ export default function Home() {
                 <li><CircleCheck size={14} /> Complete handover with documentation</li>
                 <li><CircleCheck size={14} /> Access to the public Skool community</li>
               </ul>
-              <a
-                href="#contact"
+              <button
+                type="button"
+                onClick={() => goToContact('pricing-setup')}
                 className="btn btn-outline"
                 style={{ justifyContent: 'center', marginTop: 'auto' }}
               >
                 <Mail size={14} /> Get in Touch
-              </a>
+              </button>
             </div>
 
             {/* Tier 3 */}
@@ -363,13 +410,14 @@ export default function Home() {
                 <li><CircleCheck size={14} /> Selective private Skool community</li>
                 <li><CircleCheck size={14} /> 1-on-1 calls: tips, guidance &amp; mentorship</li>
               </ul>
-              <a
-                href="#contact"
+              <button
+                type="button"
+                onClick={() => goToContact('pricing-mentorship')}
                 className="btn btn-primary"
                 style={{ justifyContent: 'center', marginTop: 'auto' }}
               >
                 <Mail size={14} /> Apply for Access
-              </a>
+              </button>
             </div>
 
           </div>
@@ -431,9 +479,9 @@ export default function Home() {
               <a href="https://github.com/systemifyautomation" target="_blank" rel="noopener noreferrer" className="btn btn-primary" style={{ fontSize: '1.05rem', padding: '16px 36px' }}>
                 <ExternalLink size={16} /> View on GitHub
               </a>
-              <a href="#contact" className="btn btn-outline" style={{ fontSize: '1.05rem', padding: '16px 36px' }}>
+              <button type="button" onClick={() => goToContact('install-section')} className="btn btn-outline" style={{ fontSize: '1.05rem', padding: '16px 36px' }}>
                 <Mail size={16} /> Get Managed Setup
-              </a>
+              </button>
             </div>
             <p style={{ marginTop: '16px', fontSize: '.82rem', color: '#4a6080' }}>
               Requires Chrome 90+ · macOS, Windows, Linux
