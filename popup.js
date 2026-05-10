@@ -33,6 +33,7 @@ function bindEvent(ids, eventName, handler) {
 let state = {
   webhookUrl: "",
   clientName: "",
+  pending: false,
   proposalData: null,      // extracted from content script
   webhookResponse: null,   // AI-generated response from n8n
   videoUrl: "",
@@ -376,7 +377,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 function updateSendButton() {
   const btn = pick("btn-send");
   if (!btn) return;
-  btn.disabled = !state.webhookUrl;
+  btn.disabled = !state.webhookUrl || state.pending;
+  btn.textContent = state.pending ? "Working\u2026" : "Generate Proposal";
 }
 
 function buildPayload() {
@@ -423,13 +425,14 @@ async function sendToWebhook() {
   }
   state.proposalData = data;
 
-  // Disable the button for 5 seconds after sending
-  btn.disabled = true;
-  btn.textContent = "Please wait…";
-  setTimeout(() => {
-    btn.textContent = "Generate Proposal";
-    updateSendButton();
-  }, 5000);
+  const clientInput = $("input-client-name");
+  if (clientInput && !clientInput.value.trim() && data.clientName) {
+    clientInput.value = data.clientName;
+    state.clientName = data.clientName;
+  }
+
+  state.pending = true;
+  updateSendButton();
 
   showStatus("Sent to AI — working in the background. You can close this popup.", "success");
 
@@ -566,6 +569,8 @@ function copyAll() {
 /*  Handle background-completed response                                */
 /* ================================================================== */
 function handleStoredResponse(stored) {
+  state.pending = false;
+  updateSendButton();
   if (stored.error) {
     showStatus(`Webhook error: ${stored.error}`, "error");
     return;
@@ -581,7 +586,13 @@ async function checkPendingResponse() {
   if (!state.activeTabId) return;
   const key = `response_${state.activeTabId}`;
   return new Promise((resolve) => {
-    chrome.storage.local.get([key], (items) => {
+    chrome.storage.local.get([key, "upwrite_pending"], (items) => {
+      // If the background is still working, show the button as pending
+      if (items.upwrite_pending && items.upwrite_pending.tabId === state.activeTabId && !items[key]) {
+        state.pending = true;
+        updateSendButton();
+        showStatus("AI is working in the background\u2026", "info");
+      }
       if (items[key]) {
         const stored = items[key];
         chrome.storage.local.remove([key]);
@@ -678,6 +689,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       showRecordedVideo(file, null, file.size);
       clearStatus();
       uploadInput.value = "";
+    });
+  }
+
+  /* -- Client name -- */
+  const clientNameInput = $("input-client-name");
+  if (clientNameInput) {
+    clientNameInput.addEventListener("input", () => {
+      state.clientName = clientNameInput.value.trim();
     });
   }
 
